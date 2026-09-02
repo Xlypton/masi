@@ -32,6 +32,7 @@ class LayoutBaselinePainter extends CustomPainter {
     this.showHandles = false,
     this.draft,
     this.selectedStroke,
+    this.replacingStroke,
   });
 
   final LayoutResult layout;
@@ -68,6 +69,14 @@ class LayoutBaselinePainter extends CustomPainter {
   /// one" can name something they can see.
   final int? selectedStroke;
 
+  /// The rock the [draft] is about to REPLACE, if it replaces one.
+  ///
+  /// Drawn nowhere while that draft is in progress: editing a rock reopens it
+  /// as the draft's own points, so painting the stored version underneath
+  /// would show every edit twice — once where the finger put it and once
+  /// where it used to be.
+  final int? replacingStroke;
+
   static const double _dotRadius = 5;
 
   /// Handles are drawn as a filled core inside a light ring, and both radii
@@ -100,6 +109,25 @@ class LayoutBaselinePainter extends CustomPainter {
     ?draft,
   ];
 
+  /// Every rock as a polyline in canvas pixels, for the thumbnail arrangement
+  /// to keep its boxes off. A closed ring carries its closing segment, or
+  /// thumbnails settle in the one gap the outline does not appear to have.
+  static List<List<Offset>> obstaclesFor(
+    LayoutResult layout,
+    LayoutPlaneFit fit, {
+    Baseline? draft,
+  }) => [
+    for (final line in [
+      if (layout.strokes.isEmpty) layout.baseline else ...layout.strokes,
+      ?draft,
+    ])
+      if (line.points.length >= 2)
+        [
+          for (final point in line.points) fit.toCanvas(point),
+          if (line.closed) fit.toCanvas(line.points.first),
+        ],
+  ];
+
   @override
   void paint(Canvas canvas, Size size) {
     final lines = _lines;
@@ -112,6 +140,9 @@ class LayoutBaselinePainter extends CustomPainter {
       if (line.points.isEmpty) continue;
 
       final isDraft = drafting && i == lines.length - 1;
+      // The rock this draft stands in for is not drawn at all — see
+      // [replacingStroke].
+      if (drafting && !isDraft && i == replacingStroke) continue;
       final provisional = isDraft || layout.isProvisional;
       final selected = !drafting && i == selectedStroke;
 
@@ -136,10 +167,13 @@ class LayoutBaselinePainter extends CustomPainter {
         canvas.drawPath(provisional ? _dashed(path) : path, paint);
       }
 
-      // While a new rock is being drawn, only ITS points are grabbable, so
-      // only its points wear handles — handles on the settled rocks would
-      // offer an edit the canvas is not listening for.
-      if (showHandles && (!drafting || isDraft)) {
+      // Handles appear only on the stroke being drawn, because that is the
+      // only stroke this canvas will let a finger reshape. A settled rock
+      // wearing grab points that quietly moved it was the whole trouble:
+      // reading the plan meant touching it, and touching it meant editing
+      // the rock without ever having said so. Editing is a mode now, entered
+      // by name, and the handles are how you can tell you are in it.
+      if (showHandles && drafting && isDraft) {
         for (final point in line.points) {
           _handle(canvas, fit.toCanvas(point));
         }
@@ -413,6 +447,7 @@ class LayoutBaselinePainter extends CustomPainter {
       old.showHandles != showHandles ||
       old.handleRingColor != handleRingColor ||
       old.selectedStroke != selectedStroke ||
+      old.replacingStroke != replacingStroke ||
       old.slots != slots ||
       old.stroke != stroke;
 }

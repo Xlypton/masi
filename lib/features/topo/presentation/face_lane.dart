@@ -141,8 +141,7 @@ class FaceRail extends StatelessWidget {
                 color: colors.separator,
               ),
             ],
-          for (var i = 0; i < ordered.length; i++)
-            _faceTile(ordered[i], i),
+          for (var i = 0; i < ordered.length; i++) _faceTile(ordered[i], i),
           if (onAddPhoto case final add?)
             _RailTile(
               key: const Key('face-rail-add'),
@@ -324,9 +323,7 @@ class _PlanTilePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final lines = layout.strokes.isEmpty
-        ? [layout.baseline]
-        : layout.strokes;
+    final lines = layout.strokes.isEmpty ? [layout.baseline] : layout.strokes;
     if (lines.every((line) => line.points.length < 2)) return;
     // Framed over ALL the rocks, so a wall holding two boulders shows two on
     // the tile rather than one and a lie about the scale.
@@ -444,58 +441,71 @@ class FaceMapPlan extends StatelessWidget {
         canvas: size,
         thumbnail: thumbnail,
         stem: stem,
+        // Off the rock, not on it: a photo lying across the outline hides
+        // the shape this screen exists to show, and reads as a mark on the
+        // rock rather than as a view of one side of it.
+        obstacles: LayoutBaselinePainter.obstaclesFor(layout, fit),
       );
       final byId = {for (final photo in photos) photo.id: photo};
 
-      return SizedBox(
-        width: size.width,
-        height: size.height,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                key: const Key('face-map-plan'),
-                painter: LayoutBaselinePainter(
-                  layout: layout,
-                  fit: fit,
-                  stroke: colors.amethyst400,
-                  provisionalStroke: colors.amethyst300,
-                  dotColor: colors.accent,
-                  pinnedColor: colors.accent,
-                  handleColor: colors.amethyst400,
-                  handleRingColor: colors.surface,
-                  selectedFaceId: activePhotoId,
-                  slots: slots,
-                ),
-              ),
-            ),
-            for (final slot in slots)
-              if (byId[slot.id] case final photo?)
-                Positioned(
-                  left: slot.topLeft.dx,
-                  top: slot.topLeft.dy,
-                  child: _MapThumbnail(
-                    photo: photo,
-                    size: slot.size,
-                    active: photo.id == activePhotoId,
-                    routeCount: routeCounts[photo.id] ?? 0,
-                    colors: colors,
-                    onTap: () => onSelect(photo),
-                    // A look, not a navigation: checking WHICH slab this is
-                    // should not cost leaving the arrangement you are reading.
-                    onLongPress: () => showPhotoPreview(
-                      context,
-                      storedPath: photo.localPath,
-                      title: 'Photo ${_orderOf(photo.id) + 1}',
-                      subtitle: switch (routeCounts[photo.id] ?? 0) {
-                        0 => 'No climbs on this side yet',
-                        1 => '1 climb on this side',
-                        final n => '$n climbs on this side',
-                      },
-                    ),
+      // Zoomable, because a crag bay drawn to fit a phone puts four photos
+      // and two boulders in about a thumb's width, and "which side is that"
+      // is exactly the question this screen answers. Read-only, so one finger
+      // can pan and nothing here can be edited by accident.
+      return InteractiveViewer(
+        minScale: 1,
+        maxScale: 6,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  key: const Key('face-map-plan'),
+                  painter: LayoutBaselinePainter(
+                    layout: layout,
+                    fit: fit,
+                    stroke: colors.amethyst400,
+                    provisionalStroke: colors.amethyst300,
+                    dotColor: colors.accent,
+                    pinnedColor: colors.accent,
+                    handleColor: colors.amethyst400,
+                    handleRingColor: colors.surface,
+                    selectedFaceId: activePhotoId,
+                    slots: slots,
                   ),
                 ),
-          ],
+              ),
+              for (final slot in slots)
+                if (byId[slot.id] case final photo?)
+                  Positioned(
+                    left: slot.topLeft.dx,
+                    top: slot.topLeft.dy,
+                    child: _MapThumbnail(
+                      photo: photo,
+                      size: slot.size,
+                      active: photo.id == activePhotoId,
+                      routeCount: routeCounts[photo.id] ?? 0,
+                      colors: colors,
+                      onTap: () => onSelect(photo),
+                      // A look, not a navigation: checking WHICH slab this is
+                      // should not cost leaving the arrangement you are reading.
+                      onLongPress: () => showPhotoPreview(
+                        context,
+                        storedPath: photo.localPath,
+                        title: 'Photo ${_orderOf(photo.id) + 1}',
+                        subtitle: switch (routeCounts[photo.id] ?? 0) {
+                          0 => 'No climbs on this side yet',
+                          1 => '1 climb on this side',
+                          final n => '$n climbs on this side',
+                        },
+                      ),
+                    ),
+                  ),
+            ],
+          ),
         ),
       );
     },

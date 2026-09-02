@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -33,7 +34,130 @@ void main() {
     }
   }
 
+  /// Whether any part of the polyline runs through [rect].
+  ///
+  /// Sampled rather than solved: this is a test, and 200 samples a segment on
+  /// a 360px canvas is finer than a pixel, so a crossing it misses is one
+  /// nobody could see either.
+  bool lineCrosses(List<Offset> line, Rect rect) {
+    for (var i = 0; i + 1 < line.length; i++) {
+      for (var step = 0; step <= 200; step++) {
+        final t = step / 200;
+        final at = Offset(
+          line[i].dx + (line[i + 1].dx - line[i].dx) * t,
+          line[i].dy + (line[i + 1].dy - line[i].dy) * t,
+        );
+        if (rect.contains(at)) return true;
+      }
+    }
+    return false;
+  }
+
   group('arrangeThumbnails', () {
+    test('no thumbnail sits ON the rock it is a photograph of', () {
+      // The ring the reported drawing had: four photos round a small boulder
+      // on a canvas with room to spare. Every thumbnail used to be free to
+      // settle across the outline, and a photo lying over the line hides the
+      // shape the whole drawing is for.
+      const centre = Offset(180, 120);
+      const radius = 52.0;
+      final ring = <Offset>[
+        for (var i = 0; i <= 4; i++)
+          Offset(
+            centre.dx + radius * math.cos(i * math.pi / 2),
+            centre.dy + radius * math.sin(i * math.pi / 2),
+          ),
+      ];
+
+      final anchors = <ThumbnailAnchor>[
+        for (var i = 0; i < 4; i++)
+          ThumbnailAnchor(
+            id: 'p$i',
+            base: ring[i],
+            // Inward, which is what a camera looking AT the rock reports —
+            // the direction that used to send every thumbnail across the
+            // outline and into the middle of the boulder.
+            direction: centre - ring[i],
+          ),
+      ];
+
+      final slots = arrangeThumbnails(
+        anchors: anchors,
+        canvas: canvas,
+        thumbnail: thumbnail,
+        obstacles: [ring],
+      );
+
+      expect(slots, hasLength(4));
+      expectNoOverlap(slots);
+      expectInBounds(slots);
+      for (final slot in slots) {
+        expect(
+          lineCrosses(ring, slot.rect),
+          isFalse,
+          reason:
+              'photo ${slot.id} is lying across the outline at '
+              '${slot.rect}',
+        );
+      }
+    });
+
+    test('and the same arrangement WITHOUT the outline does', () {
+      // The guard above has to be able to fail, or it is decoration. Same
+      // fixture, same call, obstacles left out: at least one thumbnail lands
+      // on the line.
+      const centre = Offset(180, 120);
+      const radius = 52.0;
+      final ring = <Offset>[
+        for (var i = 0; i <= 4; i++)
+          Offset(
+            centre.dx + radius * math.cos(i * math.pi / 2),
+            centre.dy + radius * math.sin(i * math.pi / 2),
+          ),
+      ];
+      final slots = arrangeThumbnails(
+        anchors: [
+          for (var i = 0; i < 4; i++)
+            ThumbnailAnchor(
+              id: 'p$i',
+              base: ring[i],
+              direction: centre - ring[i],
+            ),
+        ],
+        canvas: canvas,
+        thumbnail: thumbnail,
+      );
+      expect(
+        slots.any((slot) => lineCrosses(ring, slot.rect)),
+        isTrue,
+        reason:
+            'if nothing lands on the line without the obstacle, the test '
+            'above proves nothing',
+      );
+    });
+
+    test('an outline it cannot escape still yields every thumbnail', () {
+      // A line straight across the canvas leaves nowhere clear for a photo
+      // pinned to its middle. Best-effort is the contract: crowded beats
+      // vanished, and it must not hang trying.
+      final wall = <Offset>[const Offset(0, 120), Offset(canvas.width, 120)];
+      final slots = arrangeThumbnails(
+        anchors: [
+          for (var i = 0; i < 3; i++)
+            ThumbnailAnchor(
+              id: 'p$i',
+              base: Offset(60.0 + i * 100, 120),
+              direction: const Offset(0, -1),
+            ),
+        ],
+        canvas: canvas,
+        thumbnail: thumbnail,
+        obstacles: [wall],
+      );
+      expect(slots, hasLength(3));
+      expectInBounds(slots);
+    });
+
     test('separates four faces whose normals all converge on one point', () {
       // A ring traced the "wrong" way: every normal points at the centre, so
       // the naive placement puts all four thumbnails within a few pixels of
@@ -185,7 +309,8 @@ void main() {
           expect(
             (slot.centre - slot.base).distance,
             lessThanOrEqualTo((slot.centre - other.base).distance + 0.001),
-            reason: 'the photo for ${slot.id} sits closer to ${other.id}\'s '
+            reason:
+                'the photo for ${slot.id} sits closer to ${other.id}\'s '
                 'dot than to its own',
           );
         }
@@ -252,10 +377,7 @@ void main() {
     });
 
     test('returns nothing for no faces', () {
-      expect(
-        arrangeThumbnails(anchors: const [], canvas: canvas),
-        isEmpty,
-      );
+      expect(arrangeThumbnails(anchors: const [], canvas: canvas), isEmpty);
     });
   });
 

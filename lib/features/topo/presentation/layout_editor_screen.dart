@@ -64,6 +64,13 @@ class _CanvasPanRecognizer extends PanGestureRecognizer {
   @override
   void addAllowedPointer(PointerDownEvent event) {
     _claiming = shouldClaim(event.position);
+    // A touch on empty canvas never enters the arena at all. Merely
+    // COMPETING for it was enough to break pinch-zoom: this recognizer wins
+    // a plain drag on slop, which rejects the viewer's scale recognizer for
+    // that pointer, and two fingers opening on the plan did nothing whatever.
+    // Staying out is also what lets the page keep scrolling under a finger
+    // that landed on nothing.
+    if (!_claiming) return;
     super.addAllowedPointer(event);
   }
 
@@ -104,6 +111,41 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// position on the plan.
   final GlobalKey _canvasBoxKey = GlobalKey();
 
+  /// The plan's zoom.
+  ///
+  /// Everything this screen measures — where a tap landed, where a photo sits,
+  /// where the line runs — is in the canvas's OWN coordinates, and the
+  /// transform sits above them, so `globalToLocal` undoes it for free and not
+  /// one hit test had to learn about zoom.
+  final TransformationController _zoom = TransformationController();
+
+  /// One finger drags a photo or a point at 1x, and pans once zoomed in.
+  ///
+  /// The alternative is a screen that cannot be moved while magnified, which
+  /// is the whole reason to magnify a boulder drawn at the far corner of the
+  /// plan. Editing is not lost: pinch back out and the finger goes back to
+  /// moving things.
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _zoom.addListener(_onZoomChanged);
+  }
+
+  void _onZoomChanged() {
+    final zoomed = _zoom.value.getMaxScaleOnAxis() > 1.02;
+    if (zoomed == _zoomed) return;
+    setState(() => _zoomed = zoomed);
+  }
+
+  @override
+  void dispose() {
+    _zoom.removeListener(_onZoomChanged);
+    _zoom.dispose();
+    super.dispose();
+  }
+
   /// The layout, mapping and thumbnail boxes the last build put on screen —
   /// i.e. what a finger landing right now would actually be touching.
   /// Written during build and read only by hit tests, never to decide layout.
@@ -138,18 +180,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// to undo back to it.
   int? _draggingDraftIndex;
 
-  /// The baseline vertex being dragged, and the whole stroke as edited so far.
-  ///
-  /// Reshaping by handle is the design's primary correction — 'diamond
-  /// handles reshape it' — and its absence is what left redrawing the entire
-  /// line as the only way to fix one that was slightly wrong.
-  int? _draggingHandle;
-
-  /// Which rock the dragged vertex belongs to.
-  int? _draggingHandleStroke;
-
-  List<LayoutPoint>? _handlePoints;
-
   /// Which rock the face being dragged has reached. A drag can carry a photo
   /// from one boulder to another — that is how a wall's photos get sorted
   /// between its rocks, and with no GPS it is the only way.
@@ -174,10 +204,18 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// you can redraw on its own.
   int? _draftReplaces;
 
-  /// Whether the stroke being reshaped is a ring. Reshaping never changes
-  /// that — only redrawing does — so it is carried across the drag rather
-  /// than re-derived from the moved points.
-  bool _handleClosed = false;
+  /// Whether the stroke being edited was a closed ring when it was opened.
+  ///
+  /// Editing must not quietly turn a boulder into a wall. Closure is the one
+  /// thing this app never asks in words — a stroke is a boulder because it
+  /// closes — so reopening a ring's points to move one of them has to hand
+  /// the ring back, not a strip with the same corners.
+  bool _draftSeedClosed = false;
+
+  /// Whether this draft started from an existing rock's points rather than
+  /// from nothing. Read only by the hint, and fixed for the whole stroke —
+  /// see [_redrawHint] for why nothing here may depend on the live count.
+  bool _draftSeeded = false;
 
   bool get _redrawing => _draftPoints != null;
 
@@ -353,8 +391,15 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
             // height, and everything below it — the canvas included — jumps
             // by a line while a finger is working in it. Points already
             // placed then sit somewhere else than where they were tapped.
-            'Tap around the rock to place points, the way you walked it. Tap '
-            'the first point again to close it into a boulder.',
+            // Chosen when the stroke STARTS and fixed for its whole life —
+            // see this method's doc. Which of the two it is depends on how
+            // the draft was opened, never on how far along it is.
+            _draftSeeded
+                ? 'Drag a point to move it, tap the canvas to add another. '
+                      'Undo takes the last one back.'
+                : 'Tap around the rock to place points, the way you walked '
+                      'it. Tap the first point again to close it into a '
+                      'boulder.',
             style: TextStyle(fontSize: 13, height: 1.4, color: colors.ink2),
           ),
         ),
@@ -433,6 +478,9 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         canvas: size,
         thumbnail: _thumbnailSize,
         stem: LayoutBaselinePainter.stemLength,
+        // A photo lying across the outline hides the shape the drawing is
+        // for, and reads as a mark ON the rock rather than a view OF it.
+        obstacles: LayoutBaselinePainter.obstaclesFor(preview, fit),
       );
       // What the finger can hit, as of THIS build — see the recognizer's
       // constructor below for why it cannot read these from a closure.
@@ -440,29 +488,37 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       _hitFit = fit;
       _hitSlots = slots;
 
-      return RawGestureDetector(
-        behavior: HitTestBehavior.opaque,
-        gestures: <Type, GestureRecognizerFactory>{
-          TapGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                TapGestureRecognizer.new,
-                (instance) {
-                  instance.onTapUp = (TapUpDetails details) => _handleTap(
-                    _toLocal(details.globalPosition),
-                    preview,
-                    fit,
-                    slots,
-                  );
-                },
-              ),
-          // The faces on the canvas are drawn INSIDE an `IgnorePointer` —
-          // every touch on this surface is resolved here, against the
-          // arrangement, rather than by the boxes themselves. So the
-          // long-press has to live here too.
-          LongPressGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-                LongPressGestureRecognizer.new,
-                (instance) {
+      return InteractiveViewer(
+        transformationController: _zoom,
+        minScale: 1,
+        maxScale: 5,
+        // Pinch always zooms; one finger only pans once there is something to
+        // pan. At 1x the drag belongs to the photo or the point under it.
+        panEnabled: _zoomed,
+        clipBehavior: Clip.hardEdge,
+        child: RawGestureDetector(
+          behavior: HitTestBehavior.opaque,
+          gestures: <Type, GestureRecognizerFactory>{
+            TapGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                  TapGestureRecognizer.new,
+                  (instance) {
+                    instance.onTapUp = (TapUpDetails details) => _handleTap(
+                      _toLocal(details.globalPosition),
+                      preview,
+                      fit,
+                      slots,
+                    );
+                  },
+                ),
+            // The faces on the canvas are drawn INSIDE an `IgnorePointer` —
+            // every touch on this surface is resolved here, against the
+            // arrangement, rather than by the boxes themselves. So the
+            // long-press has to live here too.
+            LongPressGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<
+                  LongPressGestureRecognizer
+                >(LongPressGestureRecognizer.new, (instance) {
                   instance.onLongPressStart = (LongPressStartDetails details) =>
                       _previewFaceAt(
                         _toLocal(details.globalPosition),
@@ -471,91 +527,99 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                         slots,
                         photos,
                       );
-                },
-              ),
-          _CanvasPanRecognizer:
-              GestureRecognizerFactoryWithHandlers<_CanvasPanRecognizer>(
-                // Constructed ONCE for the life of this state — unlike the
-                // handlers below, which the factory re-assigns on every
-                // build. So this callback must not close over anything from
-                // the build that happened to create it: the `fit` from the
-                // first frame is the one the STORED line was drawn through,
-                // and testing a finger against it while a redraw is in
-                // progress asks about a mapping nobody is drawing in — which
-                // is why a tapped point could not be grabbed at all. It reads
-                // the fields below instead, which every build refreshes.
-                () => _CanvasPanRecognizer(
-                  shouldClaim: (global) {
-                    final at = _toLocal(global);
-                    if (_redrawing) return _draftPointNear(at) != null;
-                    final hitLayout = _hitLayout;
-                    final hitFit = _hitFit;
-                    if (hitLayout == null || hitFit == null) return false;
-                    return _handleNear(at, hitLayout, hitFit) != null ||
-                        _faceNear(at, hitLayout, hitFit, _hitSlots) != null;
+                }),
+            _CanvasPanRecognizer:
+                GestureRecognizerFactoryWithHandlers<_CanvasPanRecognizer>(
+                  // Constructed ONCE for the life of this state — unlike the
+                  // handlers below, which the factory re-assigns on every
+                  // build. So this callback must not close over anything from
+                  // the build that happened to create it: the `fit` from the
+                  // first frame is the one the STORED line was drawn through,
+                  // and testing a finger against it while a redraw is in
+                  // progress asks about a mapping nobody is drawing in — which
+                  // is why a tapped point could not be grabbed at all. It reads
+                  // the fields below instead, which every build refreshes.
+                  () => _CanvasPanRecognizer(
+                    shouldClaim: (global) {
+                      final at = _toLocal(global);
+                      if (_redrawing) return _draftPointNear(at) != null;
+                      final hitLayout = _hitLayout;
+                      final hitFit = _hitFit;
+                      if (hitLayout == null || hitFit == null) return false;
+                      // A settled rock's points are NOT grabbable here. Reading
+                      // this plan means touching it — to slide a photo, to pick
+                      // a rock out — and a stroke that reshaped under those
+                      // touches meant the drawing changed without anybody
+                      // having said they were editing it. Editing is a mode,
+                      // and this is not it.
+                      return _faceNear(at, hitLayout, hitFit, _hitSlots) !=
+                          null;
+                    },
+                  ),
+                  (instance) {
+                    // Report the position the finger actually landed on, not
+                    // the one ~18px later where the drag cleared touch slop.
+                    // Without this the stroke silently loses its first
+                    // centimetres, which matters most for the one comparison
+                    // that decides ring-or-wall: did it end where it began.
+                    instance.dragStartBehavior = DragStartBehavior.down;
+                    instance.onStart = (DragStartDetails details) => _panStart(
+                      _toLocal(details.globalPosition),
+                      preview,
+                      fit,
+                      slots,
+                    );
+                    instance.onUpdate = (DragUpdateDetails details) =>
+                        _panUpdate(
+                          _toLocal(details.globalPosition),
+                          preview,
+                          fit,
+                        );
+                    instance.onEnd = (DragEndDetails details) => _panEnd();
                   },
                 ),
-                (instance) {
-                  // Report the position the finger actually landed on, not
-                  // the one ~18px later where the drag cleared touch slop.
-                  // Without this the stroke silently loses its first
-                  // centimetres, which matters most for the one comparison
-                  // that decides ring-or-wall: did it end where it began.
-                  instance.dragStartBehavior = DragStartBehavior.down;
-                  instance.onStart = (DragStartDetails details) => _panStart(
-                    _toLocal(details.globalPosition),
-                    preview,
-                    fit,
-                    slots,
-                  );
-                  instance.onUpdate = (DragUpdateDetails details) => _panUpdate(
-                    _toLocal(details.globalPosition),
-                    preview,
-                    fit,
-                  );
-                  instance.onEnd = (DragEndDetails details) => _panEnd();
-                },
-              ),
-        },
-        child: Container(
-          key: _canvasBoxKey,
-          height: size.height,
-          decoration: BoxDecoration(
-            color: colors.surface2,
-            borderRadius: BorderRadius.circular(MasiRadii.card),
-            border: Border.all(color: colors.separator),
-          ),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: CustomPaint(
-                  key: const Key('layout-canvas'),
-                  painter: LayoutBaselinePainter(
-                    layout: preview,
-                    fit: fit,
-                    stroke: colors.amethyst400,
-                    provisionalStroke: colors.amethyst300,
-                    dotColor: colors.accent,
-                    pinnedColor: colors.accent,
-                    handleColor: colors.amethyst400,
-                    handleRingColor: colors.surface,
-                    selectedFaceId: _selectedFaceId,
-                    slots: slots,
-                    // Handles on the DRAFT as well: the points you have
-                    // placed are the points you can drag, and a stroke drawn
-                    // by tapping has to show where its taps landed.
-                    showHandles: true,
-                    draft: draft,
-                    selectedStroke: preview.strokes.length > 1
-                        ? _selectedStroke
-                        : null,
+          },
+          child: Container(
+            key: _canvasBoxKey,
+            height: size.height,
+            decoration: BoxDecoration(
+              color: colors.surface2,
+              borderRadius: BorderRadius.circular(MasiRadii.card),
+              border: Border.all(color: colors.separator),
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: CustomPaint(
+                    key: const Key('layout-canvas'),
+                    painter: LayoutBaselinePainter(
+                      layout: preview,
+                      fit: fit,
+                      stroke: colors.amethyst400,
+                      provisionalStroke: colors.amethyst300,
+                      dotColor: colors.accent,
+                      pinnedColor: colors.accent,
+                      handleColor: colors.amethyst400,
+                      handleRingColor: colors.surface,
+                      selectedFaceId: _selectedFaceId,
+                      slots: slots,
+                      // Handles on the DRAFT as well: the points you have
+                      // placed are the points you can drag, and a stroke drawn
+                      // by tapping has to show where its taps landed.
+                      showHandles: true,
+                      draft: draft,
+                      selectedStroke: preview.strokes.length > 1
+                          ? _selectedStroke
+                          : null,
+                      replacingStroke: _draftReplaces,
+                    ),
                   ),
                 ),
-              ),
-              if (!_redrawing)
-                for (final face in preview.faces)
-                  _thumbnail(colors, face, photos, slots),
-            ],
+                if (!_redrawing)
+                  for (final face in preview.faces)
+                    _thumbnail(colors, face, photos, slots),
+              ],
+            ),
           ),
         ),
       );
@@ -570,23 +634,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// unrecoverable. So the pin is applied locally for the duration and
   /// committed once, on release.
   LayoutResult _previewLayout(LayoutResult layout, List<PhotoRef> photos) {
-    // A handle drag reshapes ONE rock, so that rock's faces have to be
-    // re-resolved against it rather than carried over: they ride the stroke,
-    // and a stroke that moved without them would show every photo hanging
-    // off it.
-    final edited = _handlePoints;
-    final editedStroke = _draggingHandleStroke;
-    if (edited != null && editedStroke != null && edited.length >= 2) {
-      final strokes = [...layout.strokes];
-      if (editedStroke < strokes.length) {
-        strokes[editedStroke] = Baseline(edited, closed: _handleClosed);
-        return resolveLayoutSet(
-          faces: faceInputsFrom(photos),
-          strokes: BaselineSet(strokes),
-          origin: BaselineOrigin.authored,
-        );
-      }
-    }
     final draggingId = _draggingFaceId;
     final draggingT = _draggingT;
     if (draggingId == null || draggingT == null) return layout;
@@ -953,7 +1000,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Drag its dots to reshape it.',
+            'Edit reopens it as points you can drag.',
             style: TextStyle(fontSize: 13, height: 1.35, color: colors.ink2),
           ),
           const SizedBox(height: 10),
@@ -962,8 +1009,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               Expanded(
                 child: FilledButton.tonal(
                   key: const Key('layout-redraw-rock'),
-                  onPressed: () => _startRedrawRock(layout, index),
-                  child: const Text('Redraw'),
+                  onPressed: () => _startEditRock(layout, index),
+                  child: const Text('Edit'),
                 ),
               ),
               // Nothing to remove while the line is still the app's own
@@ -1042,7 +1089,11 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
             child: FilledButton(
               key: const Key('layout-redraw-done'),
               // Two points is a line; one is a dot nobody can navigate by.
-              onPressed: placed < 2 ? null : () => _commitDraft(closed: false),
+              // A ring reopened for editing is finished as a ring — see
+              // [_draftSeedClosed].
+              onPressed: placed < 2
+                  ? null
+                  : () => _commitDraft(closed: _draftSeedClosed),
               child: const Text('Finish'),
             ),
           ),
@@ -1229,23 +1280,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       });
       return;
     }
-    // Handles win over faces: a handle sits ON the line and a thumbnail sits
-    // off it, so where they compete the finger is far likelier to be aiming
-    // at the line it is touching.
-    final handle = _handleNear(at, layout, fit);
-    if (handle != null) {
-      final stroke = layout.strokes[handle.stroke];
-      setState(() {
-        _selectedFaceId = null;
-        _selectedStroke = handle.stroke;
-        _draggingHandle = handle.index;
-        _draggingHandleStroke = handle.stroke;
-        _handleClosed = stroke.closed;
-        _handlePoints = [...stroke.points];
-        _dragMoved = false;
-      });
-      return;
-    }
     final hit = _faceNear(at, layout, fit, slots);
     if (hit == null) return;
     setState(() {
@@ -1264,15 +1298,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       if (index == null || points == null || index >= points.length) return;
       setState(() {
         _draftPoints = [...points]..[index] = fit.toPlane(at);
-        _dragMoved = true;
-      });
-      return;
-    }
-    final handle = _draggingHandle;
-    final points = _handlePoints;
-    if (handle != null && points != null && handle < points.length) {
-      setState(() {
-        _handlePoints = [...points]..[handle] = fit.toPlane(at);
         _dragMoved = true;
       });
       return;
@@ -1313,28 +1338,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       return;
     }
     final moved = _dragMoved;
-    final reshaped = _handlePoints;
-    final reshapedStroke = _draggingHandleStroke;
     final layout = _hitLayout;
-    if (_draggingHandle != null) {
-      setState(() {
-        _draggingHandle = null;
-        _draggingHandleStroke = null;
-        _handlePoints = null;
-      });
-      if (moved &&
-          reshaped != null &&
-          reshapedStroke != null &&
-          layout != null &&
-          reshaped.length >= 2) {
-        final strokes = [...layout.strokes];
-        if (reshapedStroke < strokes.length) {
-          strokes[reshapedStroke] = Baseline(reshaped, closed: _handleClosed);
-          await _storeBaseline(BaselineSet(strokes));
-        }
-      }
-      return;
-    }
     final faceId = _draggingFaceId;
     final t = _draggingT;
     final faceStroke = _draggingFaceStroke ?? 0;
@@ -1389,32 +1393,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return bestDistance <= 34 ? best : null;
   }
 
-  /// The baseline vertex under the finger, on any of the rocks.
-  ({int stroke, int index})? _handleNear(
-    Offset at,
-    LayoutResult layout,
-    LayoutPlaneFit fit,
-  ) {
-    ({int stroke, int index})? best;
-    var bestDistance = double.infinity;
-    for (var s = 0; s < layout.strokes.length; s++) {
-      final points = layout.strokes[s].points;
-      if (points.length < 2) continue;
-      for (var i = 0; i < points.length; i++) {
-        final distance = (fit.toCanvas(points[i]) - at).distance;
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          best = (stroke: s, index: i);
-        }
-      }
-    }
-    // Tighter than the face radius: handles can sit close together on a
-    // detailed stroke, and grabbing the wrong one silently deforms the rock.
-    return bestDistance <= 22 ? best : null;
-  }
-
   /// The rock the finger is on, if any — a tap on the line itself rather
-  /// than on one of its handles or photos. Selecting one is what gives
+  /// than on one of its photos. Selecting one is what gives
   /// "remove this rock" something to name.
   int? _strokeNear(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
     int? best;
@@ -1456,16 +1436,32 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// them is climbable rock.
   void _startAddRock(LayoutResult layout) => _startDraft(layout, appends: true);
 
-  /// Starts a stroke that replaces ONE rock and leaves the others standing.
-  void _startRedrawRock(LayoutResult layout, int index) =>
-      _startDraft(layout, appends: false, replaces: index);
+  /// Reopens ONE rock as the points it is made of, leaving the others
+  /// standing.
+  ///
+  /// This is the only way to change a stroke now. The plan used to carry grab
+  /// handles on every settled rock, so reading it — sliding a photo, picking
+  /// a rock out — could reshape the drawing with nothing on screen saying an
+  /// edit had begun. Editing is a mode you enter by name, and the handles
+  /// appear when you are in it.
+  void _startEditRock(LayoutResult layout, int index) => _startDraft(
+    layout,
+    appends: false,
+    replaces: index,
+    seed: index < layout.strokes.length ? layout.strokes[index] : null,
+  );
 
   void _startDraft(
     LayoutResult layout, {
     required bool appends,
     int? replaces,
+    Baseline? seed,
   }) => setState(() {
-    _draftPoints = const [];
+    _draftPoints = seed == null
+        ? const []
+        : [for (final point in seed.points) point];
+    _draftSeedClosed = seed?.closed ?? false;
+    _draftSeeded = seed != null;
     _draftAppends = appends;
     _draftReplaces = replaces;
     _selectedFaceId = null;
@@ -1513,6 +1509,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     _draggingDraftIndex = null;
     _draftAppends = false;
     _draftReplaces = null;
+    _draftSeedClosed = false;
+    _draftSeeded = false;
   });
 
   /// Stores the tapped stroke. [closed] is the ring gesture's whole effect on
@@ -1533,6 +1531,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         _draggingDraftIndex = null;
         _draftAppends = false;
         _draftReplaces = null;
+        _draftSeedClosed = false;
+        _draftSeeded = false;
       });
       return;
     }
@@ -1546,6 +1546,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       _draggingDraftIndex = null;
       _draftAppends = false;
       _draftReplaces = null;
+      _draftSeedClosed = false;
+      _draftSeeded = false;
     });
     final drawn = Baseline(points, closed: closed && points.length >= 3);
     // Three outcomes from one draft: it takes one rock's place, it joins the

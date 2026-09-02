@@ -719,7 +719,7 @@ void main() {
   /// handle, redraw, remove — and not one of them could be reached without
   /// first guessing that the drawing was tappable, and then finding a text
   /// button at the bottom of a scrolling page.
-  testWidgets('a rock can be picked out, redrawn ON ITS OWN, and removed — '
+  testWidgets('a rock can be picked out, EDITED on its own, and removed — '
       'and the other rock survives all three', (tester) async {
     await seed(photos: 3);
     final container = makeContainer();
@@ -776,18 +776,32 @@ void main() {
     );
     expect(find.text('Rock 2'), findsWidgets);
 
-    // Redraw ONE rock. The button at the bottom of the page replaces the
-    // whole drawing, which on a two-boulder crag costs the rock that was
-    // fine to fix the one that was not.
-    await drawStroke(const Key('layout-redraw-rock'), const [
-      Offset(230, 190),
-      Offset(310, 190),
-      Offset(310, 250),
-      Offset(230, 250),
-    ]);
+    // Edit ONE rock. It reopens as its own points — editing is a mode, and
+    // this is the only door into it — and finishing writes back only that
+    // rock. The button at the bottom of the page replaces the whole drawing,
+    // which on a two-boulder crag costs the rock that was fine to fix the
+    // one that was not.
+    final secondRock = set.strokes[1].points.length;
+    await showActions(tester, const Key('layout-redraw-rock'));
+    await tester.tap(find.byKey(const Key('layout-redraw-rock')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('layout-redraw-done')),
+      findsOneWidget,
+      reason: 'Edit has to put the canvas in the drawing mode',
+    );
+
+    // One more point on the end, so the write is observable.
+    var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    await tester.tapAt(canvas.topLeft + const Offset(240, 250));
+    await tester.pumpAndSettle();
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
 
     set = await stored();
-    expect(set.length, 2, reason: 'redrawing one rock must not drop the other');
+    expect(set.length, 2, reason: 'editing one rock must not drop the other');
     expect(
       set.strokes.first.points.length,
       firstRock,
@@ -795,8 +809,10 @@ void main() {
     );
     expect(
       set.strokes[1].points.length,
-      4,
-      reason: 'the rock that was redrawn takes the new stroke',
+      secondRock + 1,
+      reason:
+          'Edit reopens the rock AS ITS POINTS — starting from an empty '
+          'canvas would make every correction a retrace',
     );
 
     // And removed.
@@ -913,6 +929,102 @@ void main() {
           'a card acting on a rock that is gone would redraw or remove '
           'something nobody pointed at — an out-of-range redraw falls through '
           'to replacing the WHOLE drawing',
+    );
+  });
+
+  /// "Don't allow the edit of the lines but only in the redraw mode."
+  ///
+  /// The plan used to carry a grab handle on every point of every settled
+  /// rock, and reading it means touching it — sliding a photo along the line,
+  /// tapping a rock to pick it out. So the drawing reshaped under the fingers
+  /// of somebody who had not said they were editing anything, and there was
+  /// no state on screen that told the two apart. The other half of this
+  /// contract — that points ARE draggable once you are drawing — is pinned by
+  /// 'a placed point can be dragged'.
+  testWidgets('no drag anywhere on the plan reshapes a settled rock', (
+    tester,
+  ) async {
+    await seed(photos: 2);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    await startRedraw(tester);
+    var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (final at in const [
+      Offset(40, 40),
+      Offset(140, 40),
+      Offset(140, 120),
+      Offset(40, 120),
+    ]) {
+      await tester.tapAt(canvas.topLeft + at);
+      await tester.pumpAndSettle();
+    }
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    Future<String?> storedJson() async => (await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson;
+
+    final before = await storedJson();
+    expect(before, isNotNull);
+
+    // Drag across the whole plan, in a grid, so this cannot pass by missing
+    // the line: wherever a handle used to be, a drag from there now moves
+    // nothing.
+    canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var x = 0.15; x < 0.9; x += 0.15) {
+      for (var y = 0.15; y < 0.9; y += 0.2) {
+        final from = Offset(
+          canvas.left + canvas.width * x,
+          canvas.top + canvas.height * y,
+        );
+        await tester.dragFrom(from, const Offset(26, 18));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    expect(
+      await storedJson(),
+      before,
+      reason: 'the rock changed shape without anybody entering an edit',
+    );
+  });
+
+  testWidgets('the plan can be pinched open', (tester) async {
+    await seed(photos: 2);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    final before = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final centre = before.center;
+
+    // Two fingers, apart. A crag bay drawn to fit a phone puts a boulder in a
+    // thumb's width, and the line is the thing this screen is for.
+    final left = await tester.startGesture(centre - const Offset(24, 0));
+    final right = await tester.startGesture(centre + const Offset(24, 0));
+    await tester.pump();
+    for (var step = 0; step < 6; step++) {
+      await left.moveBy(const Offset(-12, 0));
+      await right.moveBy(const Offset(12, 0));
+      await tester.pump();
+    }
+    await left.up();
+    await right.up();
+    await tester.pumpAndSettle();
+
+    final after = tester.getRect(find.byKey(const Key('layout-canvas')));
+    expect(
+      after.width,
+      greaterThan(before.width * 1.2),
+      reason: 'the plan did not magnify — the pinch never reached a viewer',
     );
   });
 }

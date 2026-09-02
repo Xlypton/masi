@@ -38,57 +38,65 @@ void main() {
     bool withGps = false,
     List<double>? bearings,
   }) async {
-    await db.into(db.areas).insert(
-      AreasCompanion.insert(
-        id: 'area-1',
-        createdAt: 1000,
-        updatedAt: 1000,
-        name: 'Area',
-      ),
-    );
-    await db.into(db.sectors).insert(
-      SectorsCompanion.insert(
-        id: 'sector-1',
-        createdAt: 1000,
-        updatedAt: 1000,
-        areaId: 'area-1',
-        name: 'Sector',
-        sortOrder: 0,
-      ),
-    );
-    await db.into(db.walls).insert(
-      WallsCompanion.insert(
-        id: wallId,
-        createdAt: 1000,
-        updatedAt: 1000,
-        sectorId: 'sector-1',
-        name: 'Wall',
-        sortOrder: 0,
-      ),
-    );
-    for (var i = 0; i < photos; i++) {
-      await db.into(db.photos).insert(
-        PhotosCompanion.insert(
-          id: 'photo-$i',
-          createdAt: 1000 + i,
-          updatedAt: 1000 + i,
-          wallId: wallId,
-          localPath: '/tmp/photo-$i.jpg',
-          kind: 'original',
-          width: 100,
-          height: 200,
-          sortOrder: Value(i),
-          isPrimary: Value(i == 0),
-          // Spread far enough apart to beat the noise radius, so the engine
-          // traces a real track rather than refusing to.
-          captureLatitude: Value(withGps ? 47.0 + i * 0.0005 : null),
-          captureLongitude: Value(withGps ? 12.0 + i * 0.0005 : null),
-          captureAccuracyMeters: Value(withGps ? 4 : null),
-          captureBearingDegrees: Value(
-            bearings != null ? bearings[i] : (withGps ? i * 90.0 : null),
+    await db
+        .into(db.areas)
+        .insert(
+          AreasCompanion.insert(
+            id: 'area-1',
+            createdAt: 1000,
+            updatedAt: 1000,
+            name: 'Area',
           ),
-        ),
-      );
+        );
+    await db
+        .into(db.sectors)
+        .insert(
+          SectorsCompanion.insert(
+            id: 'sector-1',
+            createdAt: 1000,
+            updatedAt: 1000,
+            areaId: 'area-1',
+            name: 'Sector',
+            sortOrder: 0,
+          ),
+        );
+    await db
+        .into(db.walls)
+        .insert(
+          WallsCompanion.insert(
+            id: wallId,
+            createdAt: 1000,
+            updatedAt: 1000,
+            sectorId: 'sector-1',
+            name: 'Wall',
+            sortOrder: 0,
+          ),
+        );
+    for (var i = 0; i < photos; i++) {
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: 'photo-$i',
+              createdAt: 1000 + i,
+              updatedAt: 1000 + i,
+              wallId: wallId,
+              localPath: '/tmp/photo-$i.jpg',
+              kind: 'original',
+              width: 100,
+              height: 200,
+              sortOrder: Value(i),
+              isPrimary: Value(i == 0),
+              // Spread far enough apart to beat the noise radius, so the engine
+              // traces a real track rather than refusing to.
+              captureLatitude: Value(withGps ? 47.0 + i * 0.0005 : null),
+              captureLongitude: Value(withGps ? 12.0 + i * 0.0005 : null),
+              captureAccuracyMeters: Value(withGps ? 4 : null),
+              captureBearingDegrees: Value(
+                bearings != null ? bearings[i] : (withGps ? i * 90.0 : null),
+              ),
+            ),
+          );
     }
   }
 
@@ -98,7 +106,6 @@ void main() {
       nowMsProvider.overrideWithValue(() => 1000),
     ],
   );
-
 
   Widget wrap(ProviderContainer container, Widget child) =>
       UncontrolledProviderScope(
@@ -192,8 +199,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final active = tester.getRect(find.byKey(const Key('face-rail-tile-photo-1')));
-    final other = tester.getRect(find.byKey(const Key('face-rail-tile-photo-0')));
+    final active = tester.getRect(
+      find.byKey(const Key('face-rail-tile-photo-1')),
+    );
+    final other = tester.getRect(
+      find.byKey(const Key('face-rail-tile-photo-0')),
+    );
     expect(active.width, greaterThan(other.width));
   });
 
@@ -410,7 +421,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(PhotoThumbnail), findsNWidgets(4));
-    for (final image in tester.widgetList<PhotoImage>(find.byType(PhotoImage))) {
+    for (final image in tester.widgetList<PhotoImage>(
+      find.byType(PhotoImage),
+    )) {
       expect(
         image.storedPath,
         startsWith('thumbs/'),
@@ -419,7 +432,8 @@ void main() {
       expect(
         image.cacheWidth,
         isNull,
-        reason: 'a cacheWidth that varies with the selected tile mints a new '
+        reason:
+            'a cacheWidth that varies with the selected tile mints a new '
             'imageCache entry on every tap',
       );
     }
@@ -551,7 +565,8 @@ void main() {
       expect(
         (box.center - plan.center).distance,
         greaterThan(140),
-        reason: 'a photo sitting on the middle of the plan is a photo on top '
+        reason:
+            'a photo sitting on the middle of the plan is a photo on top '
             'of the rock it is a picture of',
       );
     }
@@ -561,7 +576,8 @@ void main() {
         expect(
           (boxes[i].center - boxes[j].center).distance,
           greaterThan(200),
-          reason: 'not-overlapping and far-apart are different properties, '
+          reason:
+              'not-overlapping and far-apart are different properties, '
               'and only the second one reads as four sides of a rock',
         );
       }
@@ -570,7 +586,8 @@ void main() {
     expect(
       union.width,
       greaterThan(plan.width * 0.85),
-      reason: 'the photos have a whole screen to spread across and are the '
+      reason:
+          'the photos have a whole screen to spread across and are the '
           'only thing on it',
     );
   });
@@ -616,7 +633,8 @@ void main() {
     expect(
       find.text('3 climbs on this side'),
       findsOneWidget,
-      reason: 'the point of the look is to identify the face, so it says '
+      reason:
+          'the point of the look is to identify the face, so it says '
           'which one it is and what is on it',
     );
 
@@ -659,10 +677,12 @@ void main() {
     await tester.pumpAndSettle();
 
     final tile = tester.widget<Container>(
-      find.descendant(
-        of: find.byKey(const Key('face-rail-tile-photo-1')),
-        matching: find.byType(Container),
-      ).first,
+      find
+          .descendant(
+            of: find.byKey(const Key('face-rail-tile-photo-1')),
+            matching: find.byType(Container),
+          )
+          .first,
     );
     expect(
       (tile.foregroundDecoration! as BoxDecoration).border,
@@ -672,8 +692,64 @@ void main() {
     expect(
       (tile.decoration! as BoxDecoration).border,
       isNull,
-      reason: 'and must not ALSO paint before it — two frames double the '
+      reason:
+          'and must not ALSO paint before it — two frames double the '
           'stroke and bring the corner artifact back with them',
+    );
+  });
+
+  testWidgets('the plan can be pinched open', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await seedWall(photos: 4, withGps: true);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => SizedBox(
+            width: 374,
+            height: 520,
+            child: FaceMapPlan(
+              layout: layout,
+              photos: photos,
+              activePhotoId: 'photo-0',
+              routeCounts: const {},
+              onSelect: (_) {},
+              colors: MasiColors.of(context),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final before = tester.getRect(find.byKey(const Key('face-map-plan')));
+    final centre = before.center;
+    final left = await tester.startGesture(centre - const Offset(24, 0));
+    final right = await tester.startGesture(centre + const Offset(24, 0));
+    await tester.pump();
+    for (var step = 0; step < 6; step++) {
+      await left.moveBy(const Offset(-12, 0));
+      await right.moveBy(const Offset(12, 0));
+      await tester.pump();
+    }
+    await left.up();
+    await right.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getRect(find.byKey(const Key('face-map-plan'))).width,
+      greaterThan(before.width * 1.2),
+      reason:
+          'a crag bay drawn to fit a phone is a boulder in a thumb\'s '
+          'width, and which side is which is the whole question this screen '
+          'answers',
     );
   });
 }

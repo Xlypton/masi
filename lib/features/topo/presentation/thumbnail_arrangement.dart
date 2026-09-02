@@ -37,11 +37,8 @@ class ThumbnailSlot {
   final Offset centre;
   final Size size;
 
-  Rect get rect => Rect.fromCenter(
-    center: centre,
-    width: size.width,
-    height: size.height,
-  );
+  Rect get rect =>
+      Rect.fromCenter(center: centre, width: size.width, height: size.height);
 
   Offset get topLeft => rect.topLeft;
 }
@@ -78,6 +75,14 @@ class ThumbnailSlot {
 /// side of the rock they are looking at, and four of those lines cross. Near
 /// its own dot and displaced only as far as a collision demands is what reads
 /// as "this photo is that side".
+///
+/// [obstacles] are the rock outlines themselves, as polylines in canvas
+/// pixels. A thumbnail that sits ON the line hides the very shape the drawing
+/// exists to show, and reads as a photo pinned to a place on the rock rather
+/// than as a view of one side of it — so they are pushed clear of the line as
+/// well as of each other. Best-effort, like everything else here: a line that
+/// crosses the whole canvas leaves nowhere to go, and a crowded drawing beats
+/// a missing face.
 List<ThumbnailSlot> arrangeThumbnails({
   required List<ThumbnailAnchor> anchors,
   required Size canvas,
@@ -86,6 +91,8 @@ List<ThumbnailSlot> arrangeThumbnails({
   double gap = 8,
   double margin = 6,
   int iterations = 90,
+  List<List<Offset>> obstacles = const <List<Offset>>[],
+  double lineClearance = 8,
 }) {
   if (anchors.isEmpty) return const <ThumbnailSlot>[];
 
@@ -101,6 +108,38 @@ List<ThumbnailSlot> arrangeThumbnails({
   final minY = margin + thumbnail.height / 2;
   final maxY = math.max(minY, canvas.height - margin - thumbnail.height / 2);
 
+  Offset clamp(Offset p) => Offset(
+    p.dx.clamp(minX, maxX).toDouble(),
+    p.dy.clamp(minY, maxY).toDouble(),
+  );
+
+  final halfW = thumbnail.width / 2 + lineClearance;
+  final halfH = thumbnail.height / 2 + lineClearance;
+
+  /// The rock outline that cuts deepest through a thumbnail centred at [c],
+  /// or `null` when none of them touches it.
+  ({Offset mid, double span})? deepestCrossing(Offset c) {
+    ({Offset mid, double span})? worst;
+    Offset? along;
+    for (final line in obstacles) {
+      for (var s = 0; s + 1 < line.length; s++) {
+        final hit = _segmentThroughBox(line[s], line[s + 1], c, halfW, halfH);
+        if (hit == null || (worst != null && hit.span < worst.span)) continue;
+        worst = hit;
+        along = line[s + 1] - line[s];
+      }
+    }
+    if (worst == null) return null;
+    // A crossing dead through the centre has no direction to push away from;
+    // hand back the segment's normal instead, which is the shortest way off.
+    if ((c - worst.mid).distance >= 0.001) return worst;
+    final length = along?.distance ?? 0;
+    final normal = length > 0
+        ? Offset(-along!.dy / length, along.dx / length)
+        : const Offset(0, -1);
+    return (mid: c - normal, span: worst.span);
+  }
+
   final ideal = <Offset>[];
   for (var i = 0; i < n; i++) {
     final d = anchors[i].direction;
@@ -110,15 +149,42 @@ List<ThumbnailSlot> arrangeThumbnails({
         // No usable normal (a degenerate segment). Up is the one direction
         // that never reads as "attached to the wrong part of the line".
         : const Offset(0, -1);
-    ideal.add(anchors[i].base + unit * stem);
+    final want = clamp(anchors[i].base + unit * stem);
+    // A photo whose own normal points INTO the rock goes to the other side of
+    // its dot instead. Relaxation can push a thumbnail off a line it has
+    // landed on, but it cannot win an argument with the spring that put it
+    // there: the ideal is what the spring pulls toward for two thirds of the
+    // passes, so an ideal sitting on the outline is a thumbnail that spends
+    // the whole arrangement being dragged back onto it.
+    if (deepestCrossing(want) == null) {
+      ideal.add(want);
+      continue;
+    }
+    final flipped = clamp(anchors[i].base - unit * stem);
+    ideal.add(deepestCrossing(flipped) == null ? flipped : want);
   }
 
-  Offset clamp(Offset p) => Offset(
-    p.dx.clamp(minX, maxX).toDouble(),
-    p.dy.clamp(minY, maxY).toDouble(),
-  );
-
   final pos = [for (final p in ideal) clamp(p)];
+
+  /// Nudges [i] off any rock outline it is sitting on, one step per pass.
+  ///
+  /// A step rather than a solve: the exact escape distance depends on which
+  /// other thumbnail is in the way, so this cooperates with the pair
+  /// separation above instead of fighting it, and the spring decides how far
+  /// out it is worth going. The last third of the passes runs without the
+  /// spring, so the arrangement ENDS clear rather than being pulled back onto
+  /// the line after the last push.
+  bool pushOffLines(int i) {
+    // One direction per pass, from the DEEPEST crossing, never all of them at
+    // once: a thumbnail parked inside a ring is crossed by every side of it,
+    // and pushing away from each in turn cancels out to nothing — it sits in
+    // the middle of the boulder for ninety passes, perfectly balanced.
+    final hit = deepestCrossing(pos[i]);
+    if (hit == null) return false;
+    final away = pos[i] - hit.mid;
+    pos[i] = clamp(pos[i] + away / away.distance * 4.0);
+    return true;
+  }
 
   // The spring is switched off for the last third so the pass ENDS on
   // separation. With it running to the final iteration a pair could be pulled
@@ -160,19 +226,43 @@ List<ThumbnailSlot> arrangeThumbnails({
       }
     }
 
+    var onLine = false;
     for (var i = 0; i < n; i++) {
+      if (pushOffLines(i)) onLine = true;
       pos[i] = clamp(pos[i]);
     }
 
-    if (!overlapped && pass >= springUntil) break;
+    if (!overlapped && !onLine && pass >= springUntil) break;
   }
 
-  _repackRemainingOverlaps(
-    pos: pos,
-    needX: needX,
-    needY: needY,
-    clamp: clamp,
-  );
+  _repackRemainingOverlaps(pos: pos, needX: needX, needY: needY, clamp: clamp);
+
+  // The repack works on a lattice and knows nothing about the rock, so it
+  // can drop a thumbnail straight back onto the line. A short settling pass
+  // with no spring puts it right; it is a no-op when the repack did nothing.
+  if (obstacles.isNotEmpty) {
+    for (var pass = 0; pass < 40; pass++) {
+      var moved = false;
+      for (var i = 0; i < n; i++) {
+        for (var j = i + 1; j < n; j++) {
+          final delta = pos[j] - pos[i];
+          final overlapX = needX - delta.dx.abs();
+          final overlapY = needY - delta.dy.abs();
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          moved = true;
+          final push = overlapX <= overlapY
+              ? Offset((delta.dx >= 0 ? 1 : -1) * overlapX / 2, 0)
+              : Offset(0, (delta.dy >= 0 ? 1 : -1) * overlapY / 2);
+          pos[i] = clamp(pos[i] - push * 0.55);
+          pos[j] = clamp(pos[j] + push * 0.55);
+        }
+      }
+      for (var i = 0; i < n; i++) {
+        if (pushOffLines(i)) moved = true;
+      }
+      if (!moved) break;
+    }
+  }
 
   _assignToNearestBase([for (final a in anchors) a.base], pos);
 
@@ -278,7 +368,8 @@ void _repackRemainingOverlaps({
   required Offset Function(Offset) clamp,
 }) {
   bool clash(Offset a, Offset b) =>
-      (a.dx - b.dx).abs() < needX - 0.001 && (a.dy - b.dy).abs() < needY - 0.001;
+      (a.dx - b.dx).abs() < needX - 0.001 &&
+      (a.dy - b.dy).abs() < needY - 0.001;
 
   var anyOverlap = false;
   for (var i = 0; i < pos.length && !anyOverlap; i++) {
@@ -326,4 +417,61 @@ void _repackRemainingOverlaps({
     pos[i] = resolved;
     placed.add(resolved);
   }
+}
+
+/// Where the segment [a]-[b] passes through the box of half-extents
+/// [halfW]/[halfH] centred on [centre], or `null` when it misses.
+///
+/// Liang–Barsky rather than "is the closest point on the segment inside the
+/// box": a box is not a ball, so on a wide thumbnail the nearest point of a
+/// segment that genuinely crosses it can lie outside, and the naive test
+/// then reports no collision on exactly the case it exists to catch.
+///
+/// Returns the MIDPOINT of the part inside the box — the point to push away
+/// from, since pushing away from an endpoint would slide the thumbnail along
+/// the line rather than off it — and how long that part is, which is how the
+/// caller tells a graze from a line straight through the middle.
+({Offset mid, double span})? _segmentThroughBox(
+  Offset a,
+  Offset b,
+  Offset centre,
+  double halfW,
+  double halfH,
+) {
+  final left = centre.dx - halfW;
+  final right = centre.dx + halfW;
+  final top = centre.dy - halfH;
+  final bottom = centre.dy + halfH;
+  final dx = b.dx - a.dx;
+  final dy = b.dy - a.dy;
+
+  var t0 = 0.0;
+  var t1 = 1.0;
+  for (final (p, q) in <(double, double)>[
+    (-dx, a.dx - left),
+    (dx, right - a.dx),
+    (-dy, a.dy - top),
+    (dy, bottom - a.dy),
+  ]) {
+    if (p == 0) {
+      // Parallel to this pair of edges: outside it means outside the box, and
+      // no value of t can bring it back.
+      if (q < 0) return null;
+      continue;
+    }
+    final r = q / p;
+    if (p < 0) {
+      if (r > t1) return null;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return null;
+      if (r < t1) t1 = r;
+    }
+  }
+  if (t1 < t0) return null;
+  final mid = (t0 + t1) / 2;
+  return (
+    mid: Offset(a.dx + dx * mid, a.dy + dy * mid),
+    span: (t1 - t0) * math.sqrt(dx * dx + dy * dy),
+  );
 }
