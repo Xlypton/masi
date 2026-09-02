@@ -459,10 +459,16 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         thumbnail: _thumbnailSize,
         stem: LayoutBaselinePainter.stemLength,
       );
+      // EVERY rock, not just the first. Fitted to `layout.baseline` alone,
+      // this canvas showed the primary stroke and put anything drawn away
+      // from it off the edge of the screen — a second boulder you could
+      // neither see nor drag a photo onto, which is the only way a crag bay's
+      // photos get sorted between its rocks at all. The map screen has always
+      // fitted the whole drawing; this is the same call.
       final fit =
           _redrawFit ??
-          LayoutPlaneFit.forBaseline(
-            layout.baseline,
+          LayoutPlaneFit.forStrokes(
+            layout.strokes.isEmpty ? [layout.baseline] : layout.strokes,
             size,
             padLeft: insets.left,
             padTop: insets.top,

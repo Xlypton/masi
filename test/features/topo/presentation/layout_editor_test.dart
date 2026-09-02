@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline_set.dart';
 import 'package:masi/features/topo/presentation/layout_editor_screen.dart';
@@ -1025,6 +1026,94 @@ void main() {
       after.width,
       greaterThan(before.width * 1.2),
       reason: 'the plan did not magnify — the pinch never reached a viewer',
+    );
+  });
+
+  /// With no GPS, dragging a photo across is the ONLY thing that can say
+  /// which boulder of a crag bay a photo is of. Everything else on this
+  /// screen is a guess the engine made; this is the one place the
+  /// contributor's own knowledge gets in.
+  ///
+  /// The two rocks are written straight into the wall rather than drawn,
+  /// because the drawing flow re-fits the plane every time a stroke is added
+  /// and the assertion here is about WHICH rock the photo lands on — a test
+  /// that has to guess where the far rock ended up on screen is testing the
+  /// fit, not the drag.
+  testWidgets('a photo dragged across lands on the other rock, and stays '
+      'there', (tester) async {
+    await seed(photos: 2);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    // One rock along the top of the plane, one a long way below it.
+    await container
+        .read(libraryCrudRepositoryProvider)
+        .setWallBaseline(
+          wallId,
+          BaselineSet([
+            Baseline(const [LayoutPoint(0, 0), LayoutPoint(30, 0)]),
+            Baseline(const [LayoutPoint(0, 100), LayoutPoint(30, 100)]),
+          ]).encode(),
+        );
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    for (final photo in await db.select(db.photos).get()) {
+      expect(
+        photo.layoutPinnedT,
+        isNull,
+        reason:
+            'a fresh wall has no pins — the engine places every photo, '
+            'and with no pin they all ride the first rock',
+      );
+    }
+
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final tile = find.byKey(const Key('layout-face-photo-0'));
+    expect(tile, findsOneWidget, reason: 'the photo has to be on the plan');
+    final from = tester.getRect(tile).center;
+    // Onto the second rock, which the plane puts at the TOP of the canvas:
+    // the plane's y runs up and the canvas's runs down, so the rock at
+    // y = 100 is drawn above the one at y = 0. The drag projects the photo
+    // onto whichever stroke the finger is nearest when it lifts.
+    final to = Offset(canvas.center.dx, canvas.top + 12);
+
+    final drag = await tester.startGesture(from);
+    for (var step = 1; step <= 8; step++) {
+      await drag.moveTo(Offset.lerp(from, to, step / 8)!);
+      await tester.pump();
+    }
+    await drag.up();
+    await tester.pumpAndSettle();
+
+    final pin = (await (db.select(
+      db.photos,
+    )..where((t) => t.id.equals('photo-0'))).getSingle()).layoutPinnedT;
+    expect(
+      pin,
+      isNotNull,
+      reason:
+          'the drag wrote nothing — the photo cannot be moved between '
+          'rocks at all',
+    );
+    expect(
+      BaselineSet.unpack(pin!, 2).stroke,
+      1,
+      reason:
+          'the photo was dropped on the second rock and has to belong to '
+          'it — with no GPS this drag is the only thing that can say so',
+    );
+
+    // And it stays: the pin is what the next read of this wall answers with.
+    expect(
+      BaselineSet.decode(
+        (await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson,
+      )!.length,
+      2,
+      reason: 'moving a photo must not touch the drawing itself',
     );
   });
 }

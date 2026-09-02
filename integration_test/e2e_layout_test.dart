@@ -385,6 +385,62 @@ void main() {
           'tap nothing suggested',
     );
 
+    // With no GPS, dragging a photo across is the ONLY thing that can say
+    // which of a bay's boulders it is a photo of. It also could not be done
+    // at all while this canvas was fitted to the FIRST rock alone: a second
+    // rock drawn away from it was off the edge of the screen, and you cannot
+    // drop a photo on something you cannot see.
+    expect(
+      find.textContaining('0 photos'),
+      findsWidgets,
+      reason: 'the new rock starts with none — nothing has been moved yet',
+    );
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-rock-deselect')),
+      "the rock card's close control",
+    );
+    await settle(tester, frames: 6);
+
+    canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final photoTile = find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith('layout-face-') &&
+          !(widget.key! as ValueKey<String>).value.contains('pinned'),
+    );
+    expect(
+      photoTile,
+      findsWidgets,
+      reason: 'the plan has to be drawing the wall\'s photos',
+    );
+    final from = tester.getRect(photoTile.first).center;
+    final onto = Offset(canvas.right - 70, canvas.bottom - 70);
+    final drag = await tester.startGesture(from);
+    for (var step = 1; step <= 8; step++) {
+      await drag.moveTo(Offset.lerp(from, onto, step / 8)!);
+      await settle(tester, frames: 2);
+    }
+    await drag.up();
+    await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+    await showEditorAction(tester, const Key('layout-rock-chip-1'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-rock-chip-1')),
+      "the second rock's chip",
+    );
+    await settle(tester, frames: 6);
+    await showEditorAction(tester, const Key('layout-rock-shape'));
+    await binding.takeScreenshot('49-layout-photo-moved');
+    expect(
+      find.textContaining('1 photo'),
+      findsWidgets,
+      reason:
+          'the photo was dragged onto the second rock and the rock has '
+          'to say so — this is the only way a bay\'s photos get sorted',
+    );
+
     // Putting the card away is its own affordance, and it has to work or the
     // card is a one-way door.
     await tapOrFail(
