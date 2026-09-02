@@ -389,6 +389,36 @@ void main() {
       expect(await db.select(db.routes).get(), before);
     });
 
+    test('leaves an UNPLACED climb after the drawn ones, keeping the order it '
+        'had — a guidebook import is a whole wall of climbs nobody has drawn '
+        'yet, and x = 0 would put every one of them leftmost', () async {
+      await repository.upsertRoute(
+        wallId,
+        photoOne,
+        const TopoRoute(id: 1, number: 1, points: [], name: 'Unplaced first'),
+      );
+      await repository.upsertRoute(
+        wallId,
+        photoOne,
+        const TopoRoute(id: 2, number: 2, points: [], name: 'Unplaced second'),
+      );
+      await repository.upsertRoute(
+        wallId,
+        photoOne,
+        TopoRoute(id: 3, number: 3, points: lineAt(0.5), name: 'Drawn'),
+      );
+
+      await repository.renumberByPosition(wallId);
+
+      expect(
+        (await repository.loadRoutes(
+          wallId,
+          photoOne,
+        )).map((r) => '${r.number} ${r.name}'),
+        ['1 Drawn', '2 Unplaced first', '3 Unplaced second'],
+      );
+    });
+
     test('ignores deleted climbs, so a tombstone leaves no gap', () async {
       for (var i = 1; i <= 3; i++) {
         await repository.upsertRoute(

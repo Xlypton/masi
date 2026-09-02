@@ -542,13 +542,21 @@ void main() {
 
       /// Opens the dock's route list, which is closed by default — the names
       /// this test asserts on live in there.
+      ///
+      /// An upward SWIPE on the lane, because that is now the only way a
+      /// thumb can do it: the count's chevron was removed on 2026-09-02 ("only
+      /// rely on the up or down swipe") and the tally left behind carries a
+      /// Semantics tap action for assistive technology, not a tap target. A
+      /// `tapOrFail` here would find the tally, hit it, and change nothing —
+      /// the same silent-in-both-directions failure the `pullToRefresh` note
+      /// above exists for.
       Future<void> openDockBody() async {
         if (find.byKey(const Key('topo-dock-body')).evaluate().isNotEmpty) {
           return;
         }
-        final toggle = find.byKey(const Key('topo-dock-routes-toggle'));
-        if (toggle.evaluate().isEmpty) return;
-        await tapOrFail(tester, toggle, 'the dock route-list toggle');
+        final lane = find.byKey(const Key('topo-dock-lane'));
+        if (lane.evaluate().isEmpty) return;
+        await tester.fling(lane, const Offset(0, -120), 1000);
         await settle(tester, frames: 8);
       }
 
@@ -659,6 +667,24 @@ void main() {
       );
       await binding.takeScreenshot('20-stuck-climb-on-third-face');
 
+      // Into EDIT mode for the fix. Merging two rows into one climb
+      // tombstones a route, so as of 2026-09-02 it is offered only where the
+      // other edits are, not one tap away from a reader ("only show the same
+      // climb in edit mode"). Draw mode retires the dock — a contributor is
+      // working on ONE photo — and puts the plain route panel back, so the
+      // list has to be reopened there.
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-mode-toggle')),
+        'the edit-mode toggle',
+      );
+      await settle(tester, frames: 10);
+      final chip = find.byKey(const Key('topo-route-legend-chip'));
+      if (chip.evaluate().isNotEmpty) {
+        await tapOrFail(tester, chip, 'the collapsed route panel');
+        await settle(tester, frames: 8);
+      }
+
       // Its row's menu is where somebody who has just READ the wrong name
       // already is.
       await tapOrFail(
@@ -685,7 +711,6 @@ void main() {
         'the merge confirmation',
       );
       await settleNetwork(tester, budget: const Duration(seconds: 12));
-      await openDockBody();
       await binding.takeScreenshot('21-stuck-climb-merged');
 
       expect(

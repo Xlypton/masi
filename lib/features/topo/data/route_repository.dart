@@ -583,8 +583,10 @@ class RouteRepository {
   ///
   /// **Ordering key**, in order: the photo's position in the rail
   /// ([db.Photos.sortOrder], which is capture order until somebody reorders
-  /// it by hand), then the horizontal position of the line's BASE — the
-  /// bottom-most point, i.e. where a climber starts, not where the line
+  /// it by hand), then whether the climb has a line at all (one that does not
+  /// cannot be placed, and goes last), then the horizontal position of the
+  /// line's BASE — the bottom-most point, i.e. where a climber starts, not
+  /// where the line
   /// happens to end up on the topout — then the number the climb already had,
   /// and finally the row id. The last two are not decoration: this runs
   /// locally on each device and sync reconciles the results by
@@ -625,12 +627,23 @@ class RouteRepository {
               (
                 row: row,
                 photoOrder: photoOrder[row.photoId] ?? 0,
-                baseX: _baseX(row.pointsJson),
+                base: _base(row.pointsJson),
               ),
           ]..sort((a, b) {
             final byPhoto = a.photoOrder.compareTo(b.photoOrder);
             if (byPhoto != 0) return byPhoto;
-            final byX = a.baseX.compareTo(b.baseX);
+            // A climb with no line yet has no position, so it cannot be
+            // placed among the ones that do. It goes after them, keeping the
+            // order it already had. Treating "no geometry" as x = 0 would put
+            // it leftmost — and a guidebook import is a whole wall of exactly
+            // that: named, graded, numbered climbs that are nobody's to draw
+            // yet ('this route is yours to draw'). They would all jump the
+            // queue and renumber the drawn ones behind them.
+            final byPlaced = (a.base == null ? 1 : 0).compareTo(
+              b.base == null ? 1 : 0,
+            );
+            if (byPlaced != 0) return byPlaced;
+            final byX = (a.base ?? 0).compareTo(b.base ?? 0);
             if (byX != 0) return byX;
             // Two lines starting at the same x keep the order they already
             // had. Falling straight through to the row id (a uuid) would be
@@ -682,17 +695,20 @@ class RouteRepository {
   }
 
   /// The x of the bottom-most point of an encoded line — where the climb
-  /// starts. Falls back to the leftmost x, then to 0, so a line with one
-  /// point or unreadable geometry still sorts somewhere stable rather than
-  /// throwing during a renumber.
-  static double _baseX(String pointsJson) {
+  /// starts — or null when there is no line to read one from.
+  ///
+  /// Null covers both the unplaced climb (an import that could not read a
+  /// polyline leaves `[]`) and geometry that will not decode. Neither can be
+  /// positioned, and the sort above puts both after everything it can place
+  /// rather than guessing a coordinate for them.
+  static double? _base(String pointsJson) {
     final List<Offset> points;
     try {
       points = decodePoints(pointsJson);
     } catch (_) {
-      return 0;
+      return null;
     }
-    if (points.isEmpty) return 0;
+    if (points.isEmpty) return null;
     // Percent space, y growing DOWNWARD (see CoordinateTransformer): the
     // base of the line is its largest y, not its smallest.
     var base = points.first;
