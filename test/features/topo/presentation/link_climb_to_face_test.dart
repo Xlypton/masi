@@ -63,6 +63,13 @@ void main() {
     ProviderContainer container,
     String wallId,
   ) async {
+    // Phone-shaped, always: this control carries a WORD in a cluster of
+    // glyphs, and whether the five of them fit is a question only a real
+    // phone width can answer.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
@@ -127,6 +134,13 @@ void main() {
           'a line, and a climb on the wall that is not on this face — and '
           'it has to appear on the frame the line becomes one, not on the '
           'next unrelated rebuild',
+    );
+    expect(
+      find.text('Same climb, seen from here'),
+      findsOneWidget,
+      reason:
+          'a bare glyph for a thing no app has done before says nothing '
+          '— this one was asked for again after it shipped',
     );
 
     await tester.tap(find.byKey(const Key('topo-link-climb-button')));

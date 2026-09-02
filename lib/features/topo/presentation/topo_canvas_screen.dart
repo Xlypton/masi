@@ -870,7 +870,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showMasiToast('Location saved', kind: MasiToastKind.success);
+    ScaffoldMessenger.of(
+      context,
+    ).showMasiToast('Location saved', kind: MasiToastKind.success);
   }
 
   /// Lets the user choose Camera or Library (via [showPhotoSourceSheet]'s
@@ -1301,7 +1303,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       return;
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showMasiToast('Cover photo updated', kind: MasiToastKind.success);
+    ScaffoldMessenger.of(
+      context,
+    ).showMasiToast('Cover photo updated', kind: MasiToastKind.success);
   }
 
   /// U4 (manage menu): deletes [photo] (and, via
@@ -1363,7 +1367,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       return;
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showMasiToast('Photo deleted', kind: MasiToastKind.success);
+    ScaffoldMessenger.of(
+      context,
+    ).showMasiToast('Photo deleted', kind: MasiToastKind.success);
     if (!wasActiveOrInFlight) return;
 
     final remaining = await ref
@@ -2284,10 +2290,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (failure != null) {
       messenger.showMasiToast(
         sent.isEmpty
-                ? 'That could not be sent. Your changes are still here — try '
-                      'again.'
-                : 'Sent ${sent.length}, but the rest could not be sent. Those '
-                      'changes are still here — try again.',
+            ? 'That could not be sent. Your changes are still here — try '
+                  'again.'
+            : 'Sent ${sent.length}, but the rest could not be sent. Those '
+                  'changes are still here — try again.',
         kind: MasiToastKind.error,
       );
       return;
@@ -2849,93 +2855,120 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
 
     return GlassChrome(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            key: const Key('topo-undo-button'),
-            icon: MasiIcon('undo'),
-            tooltip: 'Undo',
-            onPressed: drawNotifier.undo,
-            color: colors.accent,
-            style: IconButton.styleFrom(shape: const CircleBorder()),
-          ),
-          IconButton(
-            key: const Key('topo-redo-button'),
-            icon: MasiIcon('redo'),
-            tooltip: 'Redo',
-            onPressed: drawNotifier.redo,
-            color: colors.accent,
-            style: IconButton.styleFrom(shape: const CircleBorder()),
-          ),
-          IconButton(
-            key: const Key('topo-clear-button'),
-            icon: MasiIcon('close'),
-            // Two jobs, one glyph — see [_handleCancelEditing] for why the
-            // split is deliberate. The tooltip has to track it, or the
-            // control lies about what a tap will do.
-            tooltip: hasCurrentLine ? 'Discard current route' : 'Stop editing',
-            onPressed: _handleCancelEditing,
-            color: colors.accent,
-            style: IconButton.styleFrom(shape: const CircleBorder()),
-          ),
-          // "That is climb 3, seen from here." Shown only while there is a
-          // line to say it about AND the wall has a climb that is not on
-          // this photo — which is exactly when the question can arise, and
-          // never otherwise. The alternative reading of the same draft, "a
-          // new climb", is the ✓ beside it; both are one tap, and neither is
-          // reachable by accident.
-          if (hasCurrentLine && linkCandidates.isNotEmpty)
-            IconButton(
-              key: const Key('topo-link-climb-button'),
-              icon: MasiIcon('route'),
-              tooltip: 'This line is a climb I already have',
-              onPressed: () => _handleLinkToExistingClimb(linkCandidates),
-              color: colors.accent,
-              style: IconButton.styleFrom(shape: const CircleBorder()),
-            ),
-          // The drawing tool's primary action, and the only control in this
-          // cluster that awaits a database write ([DrawController.commitRoute]
-          // upserts the new route). It used to stay enabled throughout, so an
-          // impatient second tap on a slow write ran the whole commit again.
-          // [MasiPendingButton] swallows that second tap synchronously, dims the
-          // control immediately, and — only if the write outlasts the reveal
-          // delay — draws a spinner over the glyph without changing the
-          // cluster's geometry. Tooltip kept via a wrapper (the pending button
-          // has no tooltip slot of its own) with the Key still on the button
-          // itself, so `find.byKey`/`find.byTooltip` both keep working.
-          Tooltip(
-            // Names the DESTINATION when a selected route is about to claim
-            // the line, so "why did my line join route 5?" is answered before
-            // it happens rather than after.
-            message: !hasCurrentLine
-                ? 'Done editing'
-                : (draftTargetLabel == null
-                      ? 'Save route'
-                      : 'Save line to $draftTargetLabel'),
-            child: MasiPendingButton.text(
-              key: const Key('topo-commit-button'),
-              onPressed: _handleFinishEditing,
-              style: TextButton.styleFrom(
-                backgroundColor: colors.accent.withValues(alpha: 0.16),
-                foregroundColor: colors.accent,
-                shape: const CircleBorder(),
-                // The 48x48 footprint an IconButton produced here (24 px glyph
-                // + 8 px padding, tap target padded to 48), so the glass
-                // cluster's height and spacing are unchanged.
-                minimumSize: const Size(48, 48),
-                padding: EdgeInsets.zero,
+          // ITS OWN LINE, above the tools, and in words.
+          //
+          // It was a bare glyph wedged into the cluster below, and a bare
+          // glyph for a thing no app has done before says nothing: the person
+          // who asked for this feature asked for it again after it shipped.
+          // Spelling it out does not fit down there — five controls and a
+          // phrase overflow a 390pt phone by 65px, measured — and it does not
+          // belong there either. Those four are tools for the line being
+          // drawn; this is the second READING of that line, and it appears
+          // only in the moment there is a line and a climb elsewhere on the
+          // rock for it to be.
+          if (hasCurrentLine && linkCandidates.isNotEmpty) ...[
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                key: const Key('topo-link-climb-button'),
+                onPressed: () => _handleLinkToExistingClimb(linkCandidates),
+                icon: MasiIcon('route', size: 18, color: colors.accent),
+                label: const Text('Same climb, seen from here'),
+                style: TextButton.styleFrom(
+                  foregroundColor: colors.accent,
+                  backgroundColor: colors.accent.withValues(alpha: 0.14),
+                  minimumSize: const Size(0, 44),
+                  shape: const StadiumBorder(),
+                ),
               ),
-              onError: (error, stackTrace) {
-                // A refused write is already surfaced by the
-                // `lastWriteFailure` listener in [build] (that is the
-                // controller's contract — see UF-1 there), so this exists to
-                // keep an unexpected throw out of FlutterError.reportError,
-                // never to be the user's only notification.
-                debugPrint('Commit route failed: $error\n$stackTrace');
-              },
-              child: MasiIcon('check', color: colors.accent),
             ),
+            const SizedBox(height: MasiSpacing.xs),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              IconButton(
+                key: const Key('topo-undo-button'),
+                icon: MasiIcon('undo'),
+                tooltip: 'Undo',
+                onPressed: drawNotifier.undo,
+                color: colors.accent,
+                style: IconButton.styleFrom(shape: const CircleBorder()),
+              ),
+              IconButton(
+                key: const Key('topo-redo-button'),
+                icon: MasiIcon('redo'),
+                tooltip: 'Redo',
+                onPressed: drawNotifier.redo,
+                color: colors.accent,
+                style: IconButton.styleFrom(shape: const CircleBorder()),
+              ),
+              IconButton(
+                key: const Key('topo-clear-button'),
+                icon: MasiIcon('close'),
+                // Two jobs, one glyph — see [_handleCancelEditing] for why the
+                // split is deliberate. The tooltip has to track it, or the
+                // control lies about what a tap will do.
+                tooltip: hasCurrentLine
+                    ? 'Discard current route'
+                    : 'Stop editing',
+                onPressed: _handleCancelEditing,
+                color: colors.accent,
+                style: IconButton.styleFrom(shape: const CircleBorder()),
+              ),
+              // "That is climb 3, seen from here." Shown only while there is a
+              // line to say it about AND the wall has a climb that is not on
+              // this photo — which is exactly when the question can arise, and
+              // never otherwise. The alternative reading of the same draft, "a
+              // new climb", is the ✓ beside it; both are one tap, and neither is
+              // reachable by accident.
+              // The drawing tool's primary action, and the only control in this
+              // cluster that awaits a database write ([DrawController.commitRoute]
+              // upserts the new route). It used to stay enabled throughout, so an
+              // impatient second tap on a slow write ran the whole commit again.
+              // [MasiPendingButton] swallows that second tap synchronously, dims the
+              // control immediately, and — only if the write outlasts the reveal
+              // delay — draws a spinner over the glyph without changing the
+              // cluster's geometry. Tooltip kept via a wrapper (the pending button
+              // has no tooltip slot of its own) with the Key still on the button
+              // itself, so `find.byKey`/`find.byTooltip` both keep working.
+              Tooltip(
+                // Names the DESTINATION when a selected route is about to claim
+                // the line, so "why did my line join route 5?" is answered before
+                // it happens rather than after.
+                message: !hasCurrentLine
+                    ? 'Done editing'
+                    : (draftTargetLabel == null
+                          ? 'Save route'
+                          : 'Save line to $draftTargetLabel'),
+                child: MasiPendingButton.text(
+                  key: const Key('topo-commit-button'),
+                  onPressed: _handleFinishEditing,
+                  style: TextButton.styleFrom(
+                    backgroundColor: colors.accent.withValues(alpha: 0.16),
+                    foregroundColor: colors.accent,
+                    shape: const CircleBorder(),
+                    // The 48x48 footprint an IconButton produced here (24 px glyph
+                    // + 8 px padding, tap target padded to 48), so the glass
+                    // cluster's height and spacing are unchanged.
+                    minimumSize: const Size(48, 48),
+                    padding: EdgeInsets.zero,
+                  ),
+                  onError: (error, stackTrace) {
+                    // A refused write is already surfaced by the
+                    // `lastWriteFailure` listener in [build] (that is the
+                    // controller's contract — see UF-1 there), so this exists to
+                    // keep an unexpected throw out of FlutterError.reportError,
+                    // never to be the user's only notification.
+                    debugPrint('Commit route failed: $error\n$stackTrace');
+                  },
+                  child: MasiIcon('check', color: colors.accent),
+                ),
+              ),
+            ],
           ),
         ],
       ),
