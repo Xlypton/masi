@@ -569,4 +569,136 @@ class RouteRepository {
       );
     });
   }
+
+  /// Renumbers every live climb on [wallId] 1..n in reading order — left to
+  /// right across each photo, photos in strip order — and returns the
+  /// `oldNumber -> newNumber` map of what moved (empty when nothing did).
+  ///
+  /// Numbers used to be handed out in the order lines were DRAWN, which is
+  /// the one order a guidebook never uses: draw the left-hand line last and
+  /// it is numbered 4 on a wall whose numbers otherwise read 3, 1, 2 from
+  /// the path (user request, 2026-09-02: "renumber routes if needed, always
+  /// show the route number from left to right"). A topo is read at the rock
+  /// by walking along the base, so the numbers have to run the same way.
+  ///
+  /// **Ordering key**, in order: the photo's position in the rail
+  /// ([db.Photos.sortOrder], which is capture order until somebody reorders
+  /// it by hand), then the horizontal position of the line's BASE — the
+  /// bottom-most point, i.e. where a climber starts, not where the line
+  /// happens to end up on the topout — then the number the climb already had,
+  /// and finally the row id. The last two are not decoration: this runs
+  /// locally on each device and sync reconciles the results by
+  /// last-writer-wins, with no notion of "these two disagree", so the order
+  /// has to be a total one that every device computes the same way. Ordering
+  /// ties by the existing number also means a wall where nothing has moved
+  /// keeps every number it had.
+  ///
+  /// Only the climb's HOME line is consulted. A climb drawn on three photos
+  /// still has exactly one number, and the photo it calls home is the one
+  /// that places it.
+  ///
+  /// [db.Routes.colorIndex] is recomputed with the number, because it has
+  /// always been a pure function of it ([routeColorIndexFor]) and every
+  /// other writer derives it that way; leaving it behind would put two
+  /// neighbours in one colour.
+  ///
+  /// Rows that move are marked `dirty` — unlike the v16 migration's
+  /// renumber, which every device computed identically for itself. This one
+  /// follows an edit, so the other devices have to be told.
+  Future<Map<int, int>> renumberByPosition(String wallId) async {
+    return _db.transaction(() async {
+      final rows = await (_db.select(
+        _db.routes,
+      )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).get();
+      if (rows.isEmpty) return const <int, int>{};
+
+      final photoOrder = <String, int>{
+        for (final photo in await (_db.select(
+          _db.photos,
+        )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).get())
+          photo.id: photo.sortOrder,
+      };
+
+      final keyed =
+          [
+            for (final row in rows)
+              (
+                row: row,
+                photoOrder: photoOrder[row.photoId] ?? 0,
+                baseX: _baseX(row.pointsJson),
+              ),
+          ]..sort((a, b) {
+            final byPhoto = a.photoOrder.compareTo(b.photoOrder);
+            if (byPhoto != 0) return byPhoto;
+            final byX = a.baseX.compareTo(b.baseX);
+            if (byX != 0) return byX;
+            // Two lines starting at the same x keep the order they already
+            // had. Falling straight through to the row id (a uuid) would be
+            // deterministic but arbitrary, and would reshuffle a wall whose
+            // numbering nobody had any reason to disturb — including one
+            // imported with placeholder geometry, where every line starts at
+            // the same place.
+            final byNumber = a.row.number.compareTo(b.row.number);
+            if (byNumber != 0) return byNumber;
+            return a.row.id.compareTo(b.row.id);
+          });
+
+      final moved = <int, int>{};
+      for (var i = 0; i < keyed.length; i++) {
+        final current = keyed[i].row.number;
+        if (current != i + 1) moved[current] = i + 1;
+      }
+      if (moved.isEmpty) return const <int, int>{};
+
+      final now = nowMs();
+      // Two passes, because `idx_routes_wall_number_live` is a UNIQUE index
+      // and swapping two climbs writes one of them onto a number the other
+      // still holds. Negative numbers are the parking space: they are unique
+      // among themselves, no other query on this table filters by sign, and
+      // the whole thing is inside one transaction, so nothing outside ever
+      // observes a climb numbered -2.
+      for (var i = 0; i < keyed.length; i++) {
+        if (!moved.containsKey(keyed[i].row.number)) continue;
+        await (_db.update(_db.routes)
+              ..where((t) => t.id.equals(keyed[i].row.id)))
+            .write(db.RoutesCompanion(number: Value(-(i + 1))));
+      }
+      for (var i = 0; i < keyed.length; i++) {
+        if (!moved.containsKey(keyed[i].row.number)) continue;
+        await (_db.update(
+          _db.routes,
+        )..where((t) => t.id.equals(keyed[i].row.id))).write(
+          db.RoutesCompanion(
+            number: Value(i + 1),
+            colorIndex: Value(routeColorIndexFor(i + 1)),
+            sortOrder: Value(i + 1),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
+      }
+      return moved;
+    });
+  }
+
+  /// The x of the bottom-most point of an encoded line — where the climb
+  /// starts. Falls back to the leftmost x, then to 0, so a line with one
+  /// point or unreadable geometry still sorts somewhere stable rather than
+  /// throwing during a renumber.
+  static double _baseX(String pointsJson) {
+    final List<Offset> points;
+    try {
+      points = decodePoints(pointsJson);
+    } catch (_) {
+      return 0;
+    }
+    if (points.isEmpty) return 0;
+    // Percent space, y growing DOWNWARD (see CoordinateTransformer): the
+    // base of the line is its largest y, not its smallest.
+    var base = points.first;
+    for (final p in points) {
+      if (p.dy > base.dy) base = p;
+    }
+    return base.dx;
+  }
 }

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/application/wall_route_edit_permission.dart';
 import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 
@@ -797,6 +798,87 @@ class DrawController extends Notifier<DrawState> {
     }
   }
 
+  /// Whether this device may write to [wallId]'s climbs at all — someone
+  /// else's wall is read here and proposed to, never renumbered under them.
+  ///
+  /// Answers `false` on any failure. A renumber is housekeeping, and
+  /// housekeeping that cannot establish it is allowed does not proceed.
+  Future<bool> _mayRenumber(String wallId) async {
+    try {
+      return await ref.read(canEditWallRoutesProvider(wallId).future);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Re-runs the wall's left-to-right numbering after a write that could have
+  /// changed it, and folds the result into the in-memory routes.
+  ///
+  /// Called after — never instead of — the write itself, so a renumber that
+  /// fails leaves a correctly saved line with stale numbers rather than
+  /// rolling a good save back. Numbering is presentation; the line is the
+  /// work.
+  ///
+  /// The in-memory list is patched rather than reloaded. A reload would come
+  /// back through [loadForWall], which clears the draft, the selection and
+  /// both undo stacks — everything the climber is in the middle of. Patching
+  /// keeps [TopoRoute.id]s exactly as they were (the undo stack and the
+  /// selection are both keyed on them) and only moves numbers, colours and
+  /// the list's order, which is what the reload would have changed anyway.
+  ///
+  /// A no-op on a wall the climber may not write to: geometry edits there
+  /// take the proposal path and never reach the database, so there is
+  /// nothing to renumber and nothing that may be renumbered.
+  Future<void> _renumberByPosition() async {
+    // Every caller reaches here after awaiting its own write, so the screen
+    // may already have been popped and this autoDispose controller disposed —
+    // in which case even READING `state` throws. Same guard, same reason, as
+    // [_writeThrough]'s.
+    if (!ref.mounted) return;
+    final wallId = state.activeWallId;
+    if (wallId == null) return;
+    if (state.proposalOnlyGeometryEdits) return;
+
+    final Map<int, int> moved;
+    try {
+      moved = await ref
+          .read(routeRepositoryProvider)
+          .renumberByPosition(wallId);
+    } catch (error, stackTrace) {
+      debugPrint('renumberByPosition($wallId) failed: $error\n$stackTrace');
+      return;
+    }
+    if (moved.isEmpty) return;
+    // autoDispose: the screen may have been popped during the await.
+    if (!ref.mounted) return;
+
+    final renumbered = [
+      for (final route in state.routes)
+        if (moved[route.number] case final updated?)
+          route.copyWith(
+            number: updated,
+            colorIndex: routeColorIndexFor(updated),
+          )
+        else
+          route,
+    ]..sort((a, b) => a.number.compareTo(b.number));
+
+    // The wall may hold climbs this photo does not show, so the highest
+    // number here is a floor, not the answer. Nothing else in the controller
+    // knows the wall's true count, and handing out a number that already
+    // exists elsewhere is the collision v16 exists to prevent — so the seed
+    // only ever grows.
+    final highest = renumbered.isEmpty
+        ? 0
+        : renumbered.map((r) => r.number).reduce((a, b) => a > b ? a : b);
+    state = state.copyWith(
+      routes: renumbered,
+      nextNumber: highest + 1 > state.nextNumber
+          ? highest + 1
+          : state.nextNumber,
+    );
+  }
+
   /// Clears [DrawState.lastWriteFailure] once the presenter has shown it, so
   /// the next failure is observed as a fresh change. No-op when there is
   /// nothing to clear, so calling it defensively never churns state.
@@ -1305,6 +1387,9 @@ class DrawController extends Notifier<DrawState> {
       write: () =>
           ref.read(routeRepositoryProvider).upsertRoute(wallId, photoId, route),
     );
+    // Dragging a line's base past its neighbour's changes which one is
+    // leftmost, and therefore which one is climb 1.
+    await _renumberByPosition();
   }
 
   /// If there are at least 2 current points, moves them (and any
@@ -1394,6 +1479,10 @@ class DrawController extends Notifier<DrawState> {
       write: () =>
           ref.read(routeRepositoryProvider).upsertRoute(wallId, photoId, route),
     );
+    // A new line lands wherever it was drawn, which is very often to the left
+    // of lines that already exist — the case that made the numbers unreadable
+    // in the first place.
+    await _renumberByPosition();
   }
 
   /// Saves the draft as [climb]'s line on THIS photo — "that is climb 3, seen
@@ -1507,6 +1596,9 @@ class DrawController extends Notifier<DrawState> {
         await repository.upsertRoute(wallId, photoId, placed);
       },
     );
+    // One climb fewer on the wall: everything above the merged number moves
+    // down one.
+    await _renumberByPosition();
   }
 
   /// The selected route a [commitRoute] right now could put the draft on, and
@@ -1852,6 +1944,9 @@ class DrawController extends Notifier<DrawState> {
           .read(routeRepositoryProvider)
           .softDeleteRoute(wallId, photoId, removedRoute.number),
     );
+    // Closes the gap the removed climb left, so the wall still reads
+    // 1, 2, 3 rather than 1, 3, 4.
+    await _renumberByPosition();
   }
 
   /// Sets the symbol type that will be placed by [placeSymbol]. Passing
@@ -2400,6 +2495,23 @@ class DrawController extends Notifier<DrawState> {
     final int wallMaxNumber;
     try {
       final repository = ref.read(routeRepositoryProvider);
+      // BEFORE the read, so what comes back is already in reading order.
+      //
+      // This is what fixes topos that were numbered before numbering was
+      // positional: they are renumbered the first time their owner opens
+      // them, without anyone having to edit anything. It is a no-op — one
+      // SELECT, no writes — once a wall is in order, which is every open
+      // after the first.
+      //
+      // Gated on ownership rather than on [DrawState.proposalOnlyGeometryEdits]
+      // (what [_renumberByPosition] checks): that flag is pushed in by the
+      // canvas once its permission read resolves, and at THIS point in the
+      // load it is still whatever the last wall left behind. Reading the
+      // permission directly is the only answer that is right on the first
+      // frame, which is the frame this runs on.
+      if (await _mayRenumber(wallId)) {
+        await repository.renumberByPosition(wallId);
+      }
       loaded = await repository.loadRoutes(wallId, photoId);
       wallMaxNumber = await repository.maxRouteNumber(wallId);
     } catch (error, stackTrace) {
