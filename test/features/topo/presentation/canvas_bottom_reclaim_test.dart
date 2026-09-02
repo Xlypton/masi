@@ -77,24 +77,25 @@ void main() {
     );
   }
 
-  // A1/A2 note (2026-08-11): the top-bar `topo-add-photo-button` these two
-  // tests were originally written against is GONE — the user called it
-  // redundant, because the photo strip immediately below that row already
-  // ends in a '+' tile (`photo-strip-add`) wired to the same `_pickImage`,
-  // sitting right next to the thumbnails it adds to. The claim these tests
-  // defend is unchanged and still worth defending: there is exactly ONE
-  // add-photo affordance on a canvas that has a photo. Only its identity has
-  // moved — three times now. It was a bottom-right FAB, then the photo
+  // A1/A2 note: the claim these tests defend has never changed — there is
+  // exactly ONE add-photo affordance on a canvas that has a photo. Only its
+  // identity has moved, four times now: a bottom-right FAB, then the photo
   // strip's '+' tile, then a top-row glyph while the strip was a row of 7px
   // dots (a dot row has nothing you can append a '+' to and still have it
-  // read as "add a photo"), and now the dock's face rail carries it again —
-  // beside the thumbnails it adds to. The top-row glyph is what a wall with
-  // ONE photo gets, since the rail needs two faces to exist: the two are
-  // mutually exclusive, which is what keeps the ONE-affordance claim true.
-  // These tests pump a single-photo canvas, so the glyph is the one they see.
+  // read as "add a photo"), then the dock's face rail once that put real
+  // thumbnails back.
+  //
+  // It is the top-row glyph again, and now in EDIT mode rather than view
+  // (user request, 2026-09-02: "the plus icon at the end of the image roll
+  // should only be there in edit mode"). The rail is what a reader pages
+  // through — every other tile on it selects a face — so a tile that opens
+  // the camera was the odd one out at exactly the moment a thumb was flicking
+  // past. The rule now: read mode navigates faces, edit mode changes them.
+  // So these tests are inverted relative to how they were written, and the
+  // MODE is what they check, not the photo count.
 
   testWidgets(
-    'A1: view mode offers EXACTLY ONE add-photo affordance, in the top bar, '
+    'A1: EDIT mode offers EXACTLY ONE add-photo affordance, in the top bar, '
     'and no bottom-right FAB competing with the route legend',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
@@ -112,12 +113,24 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
+      expect(
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+        DrawMode.view,
+      );
+      expect(
+        find.byKey(const Key('topo-add-photo-button')),
+        findsNothing,
+        reason: 'reading a topo is not the moment to add a photo to it',
+      );
+
+      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+      await tester.pumpAndSettle();
       expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
       expect(
         find.byType(FloatingActionButton),
         findsNothing,
-        reason: 'a bottom-right FAB sits over the route legend and swallows '
+        reason:
+            'a bottom-right FAB sits over the route legend and swallows '
             'its per-route menu taps — painted, findable, unreachable',
       );
       expect(find.byTooltip('Pick a photo'), findsNothing);
@@ -125,7 +138,7 @@ void main() {
   );
 
   testWidgets(
-    'A2: the add-photo glyph shows in view mode, is withheld while drawing, '
+    'A2: the add-photo glyph shows in edit mode, is withheld while reading, '
     'and tapping it invokes the same _pickImage handler (opens the '
     'photo-source action sheet)',
     (tester) async {
@@ -144,21 +157,18 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // View mode.
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
-
-      // Draw mode: withheld. Mid-stroke is not the moment to open a photo
-      // picker, and the draw-mode bottom cluster owns that corner.
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pumpAndSettle();
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
+      // View mode: withheld.
       expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
 
-      // Back to view (the bottom cluster's ✓ is the way out of draw mode
-      // since 2026-08-12), then tap the tile and confirm it invokes
-      // _pickImage.
-      await tester.tap(find.byKey(const Key('topo-commit-button')));
+      // Draw mode: there, and it is the same handler as ever.
+      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
+      expect(
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+        DrawMode.draw,
+      );
+      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+
       await tester.tap(find.byKey(const Key('topo-add-photo-button')));
       await tester.pumpAndSettle();
 
@@ -254,7 +264,7 @@ void main() {
 
   testWidgets(
     'A4: draw mode still shows the undo/redo/clear/commit cluster, and the '
-    'add-photo glyph steps out of its way',
+    'add-photo glyph sits in the TOP row, nowhere near it',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -273,23 +283,33 @@ void main() {
 
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
+      expect(
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+        DrawMode.draw,
+      );
 
       expect(find.byKey(const Key('topo-undo-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-redo-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-clear-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-commit-button')), findsOneWidget);
 
-      // Nothing competes with the cluster for the bottom of the screen.
-      expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
+      // The add-photo glyph belongs to edit mode now, so it IS on screen —
+      // but in the top row, which is the whole reason it is allowed to be:
+      // nothing competes with the cluster for the bottom of the screen.
+      final addPhoto = find.byKey(const Key('topo-add-photo-button'));
+      expect(addPhoto, findsOneWidget);
+      expect(
+        tester.getBottomLeft(addPhoto).dy,
+        lessThan(
+          tester.getTopLeft(find.byKey(const Key('topo-undo-button'))).dy,
+        ),
+      );
       expect(find.byType(FloatingActionButton), findsNothing);
     },
   );
 
   testWidgets('A5: with no photo yet, the empty state still offers a working '
-      'add-photo affordance — the user is never stranded.', (
-    tester,
-  ) async {
+      'add-photo affordance — the user is never stranded.', (tester) async {
     final db = AppDatabase(NativeDatabase.memory());
     addTearDown(db.close);
     final container = ProviderContainer(
@@ -351,78 +371,92 @@ void main() {
     },
   );
 
-  testWidgets(
-    'top pill with route selected does not overflow at 375px width',
-    (tester) async {
-      // 375px is this project's supported minimum width (see CLAUDE.md /
-      // DESIGN.md). 320px (older, narrower iPhones) is intentionally out
-      // of scope for this regression test.
-      const viewportSize = Size(375, 812);
-      tester.view.physicalSize = viewportSize;
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('top pill with route selected does not overflow at 375px width', (
+    tester,
+  ) async {
+    // 375px is this project's supported minimum width (see CLAUDE.md /
+    // DESIGN.md). 320px (older, narrower iPhones) is intentionally out
+    // of scope for this regression test.
+    const viewportSize = Size(375, 812);
+    tester.view.physicalSize = viewportSize;
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      final seeded = await seedWallWithPhotoAndRoute(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+    final seeded = await seedWallWithPhotoAndRoute(tester);
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      await tester.pumpWidget(
-        wrap(
-          seeded.container,
-          TopoCanvasScreen(
-            wallId: seeded.wallId,
-            debugInitialImageSize: const Size(1000, 2000),
-          ),
+    await tester.pumpWidget(
+      wrap(
+        seeded.container,
+        TopoCanvasScreen(
+          wallId: seeded.wallId,
+          debugInitialImageSize: const Size(1000, 2000),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
-      expect(
-        seeded.container.read(drawControllerProvider(seeded.wallId)).routes,
-        hasLength(1),
-      );
+    expect(
+      seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+      DrawMode.view,
+    );
+    expect(
+      seeded.container.read(drawControllerProvider(seeded.wallId)).routes,
+      hasLength(1),
+    );
 
-      // Select the seeded route directly through the same provider
-      // `_topTrailingActions` reads (`drawControllerProvider`) — this is
-      // the gate the edit-metadata glyph needs (`selectedRouteId != null`),
-      // and is far less fiddly than hit-testing the canvas's route-tap
-      // detection to select it via a real tap.
-      seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
-      await tester.pumpAndSettle();
+    // Select the seeded route directly through the same provider
+    // `_topTrailingActions` reads (`drawControllerProvider`) — this is
+    // the gate the edit-metadata glyph needs (`selectedRouteId != null`),
+    // and is far less fiddly than hit-testing the canvas's route-tap
+    // detection to select it via a real tap.
+    seeded.container
+        .read(drawControllerProvider(seeded.wallId).notifier)
+        .selectRoute(1);
+    await tester.pumpAndSettle();
 
-      // View mode's full trailing set: AR (photo + a visible route) +
-      // mode-toggle + locate-on-map. Two glyphs lighter than it used to be —
-      // edit-metadata moved to draw mode and add-photo was removed entirely
-      // (2026-08-11) — so this is now the SMALLER of the two modes; draw
-      // mode's Cancel/Save pair is the width worst case, covered by
-      // topo_canvas_edit_location_test.dart.
-      expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
-      expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
-      expect(
-        find.byKey(const Key('topo-locate-on-map-button')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('topo-edit-metadata-button')),
-        findsNothing,
-        reason: 'editing a route\'s details is an edit-mode action now',
-      );
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+    // View mode's full trailing set: AR (photo + a visible route) +
+    // mode-toggle + locate-on-map. Three glyphs lighter than it once was —
+    // edit-metadata and, since 2026-09-02, add-photo are both edit-mode
+    // actions — so this is the SMALLER of the two modes; draw mode's
+    // Cancel/Save pair is the width worst case, covered by
+    // topo_canvas_edit_location_test.dart and re-checked below.
+    expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
+    expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('topo-locate-on-map-button')), findsOneWidget);
+    expect(
+      find.byKey(const Key('topo-edit-metadata-button')),
+      findsNothing,
+      reason: 'editing a route\'s details is an edit-mode action now',
+    );
+    expect(
+      find.byKey(const Key('topo-add-photo-button')),
+      findsNothing,
+      reason: 'so is adding a photo of the rock',
+    );
 
-      // No RenderFlex overflow (or any other exception) from cramming the
-      // back chevron + title + 5 icons into the top pill at the supported
-      // minimum width, with every tap target at the iOS HIG's 44x44
-      // minimum (see `_topRowIconStyle`'s doc) — the accessibility
-      // regression this test guards against is a tap target shrunk BELOW
-      // 44x44 to buy overflow margin, not the overflow itself.
-      expect(tester.takeException(), isNull);
+    // No RenderFlex overflow (or any other exception) from cramming the
+    // back chevron + title + 5 icons into the top pill at the supported
+    // minimum width, with every tap target at the iOS HIG's 44x44
+    // minimum (see `_topRowIconStyle`'s doc) — the accessibility
+    // regression this test guards against is a tap target shrunk BELOW
+    // 44x44 to buy overflow margin, not the overflow itself.
+    expect(tester.takeException(), isNull);
 
-      // The title still renders (ellipsized is fine at this width).
-      expect(find.text('Wall'), findsOneWidget);
-    },
-  );
+    // The title still renders (ellipsized is fine at this width).
+    expect(find.text('Wall'), findsOneWidget);
+
+    // And the mode that gained a glyph still fits. Draw mode is where
+    // add-photo lives now, so the width worst case moved with it and has to
+    // be measured here rather than assumed.
+    await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Wall'), findsOneWidget);
+  });
 
   testWidgets(
     'top pill with route selected does not overflow at 375px width even at '
@@ -464,8 +498,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
-      seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
+      expect(
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+        DrawMode.view,
+      );
+      seeded.container
+          .read(drawControllerProvider(seeded.wallId).notifier)
+          .selectRoute(1);
       await tester.pumpAndSettle();
 
       // Same trailing set as the 1x test above, all still present under the
@@ -581,14 +620,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
+      expect(
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
+        DrawMode.view,
+      );
 
       // The screen starts with the legend expanded (view mode's default —
       // see LegendExpandedController.build()); force it into the collapsed
       // `_LegendChip` form directly via the provider, the same seam
       // legend_reset_on_remount_test.dart uses, rather than hunting for a
       // tappable chevron.
-      seeded.container.read(legendExpandedProvider(seeded.wallId).notifier).toggle();
+      seeded.container
+          .read(legendExpandedProvider(seeded.wallId).notifier)
+          .toggle();
       await tester.pumpAndSettle();
 
       expect(

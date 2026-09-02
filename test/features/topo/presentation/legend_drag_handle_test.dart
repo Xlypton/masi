@@ -9,10 +9,14 @@
 //   * drag/flick UP on the expanded handle -> the next level of detail, i.e.
 //     this wall's community view (covered by
 //     `topo_open_community_button_test.dart`, which owns that destination);
-//   * `topo-route-legend-collapse` (the chevron) is a real button and the
-//     ONLY thing in the header a tap acts on — the header itself is a drag
-//     surface, so a tap that was meant to be a pull no longer collapses the
-//     panel out from under the user.
+//   * there is NO chevron button any more (user request, 2026-09-02: "don't
+//     need the little chevron on the routes component, only rely on the up or
+//     down swipe"), and the header is a pure drag surface: a tap that was
+//     meant to be a pull does not collapse the panel out from under the user,
+//     and nothing else up there acts on a tap either.
+//   * because the button is gone, the pull has to answer a SLOW drag as well
+//     as a flick — a gesture that only worked when hurried would leave the
+//     panel with no way to close.
 //
 // Pumped through `TopoCanvasBody` directly (the documented test seam — see
 // its class doc) with an injected `imageSize`/`drawState`, so no photo is
@@ -100,13 +104,35 @@ void main() {
     expect(find.byKey(_overlayKey), findsOneWidget);
   });
 
+  testWidgets('there is no chevron button on the header at all', (
+    tester,
+  ) async {
+    await _pumpBody(tester);
+
+    expect(
+      find.byKey(const Key('topo-route-legend-collapse')),
+      findsNothing,
+      reason: 'removed by request — the pull is the affordance',
+    );
+  });
+
   testWidgets(
-    'the chevron button collapses the panel — the affordance the arrow now '
-    'genuinely stands for',
+    'a slow, deliberate drag DOWN collapses the panel even with no flick '
+    'velocity — the gesture that replaced the button cannot require a hurry',
     (tester) async {
       final container = await _pumpBody(tester);
 
-      await tester.tap(find.byKey(const Key('topo-route-legend-collapse')));
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(_handleKey)),
+      );
+      // 40px over a second: unmistakable movement, negligible velocity.
+      for (var i = 0; i < 10; i++) {
+        await gesture.moveBy(
+          const Offset(0, 4),
+          timeStamp: Duration(milliseconds: 100 * (i + 1)),
+        );
+      }
+      await gesture.up();
       await tester.pumpAndSettle();
 
       expect(container.read(legendExpandedProvider(_testWallId)), isFalse);
@@ -131,21 +157,20 @@ void main() {
   );
 
   testWidgets(
-    'a slow, low-velocity drag on the handle does nothing — only a deliberate '
-    'flick past the threshold acts, so a stray finger movement while reading '
-    'the list cannot close it',
+    'a small, slow drift on the handle does NOT collapse — a finger resting '
+    'on the panel while reading the list is not a pull',
     (tester) async {
       final container = await _pumpBody(tester);
 
       final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(_handleKey)),
       );
-      // Ten small steps spread over a second: real movement, negligible
-      // velocity.
-      for (var i = 0; i < 10; i++) {
+      // 10px over a second: under the distance threshold, and far under the
+      // flick one.
+      for (var i = 0; i < 5; i++) {
         await gesture.moveBy(
           const Offset(0, 2),
-          timeStamp: Duration(milliseconds: 100 * (i + 1)),
+          timeStamp: Duration(milliseconds: 200 * (i + 1)),
         );
       }
       await gesture.up();

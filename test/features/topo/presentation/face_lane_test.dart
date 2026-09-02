@@ -151,7 +151,6 @@ void main() {
             onSelect: (photo) => selected = photo,
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -191,7 +190,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -226,7 +224,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -260,7 +257,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -305,7 +301,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: () => mapOpened++,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -314,7 +309,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('face-rail-map')), findsOneWidget);
-    // Read-only: no way to add a photo, so no tile offering to.
+    // The rail carries no '+' at all any more (user request, 2026-09-02):
+    // every tile on it selects a face, and adding a photo is an edit-mode
+    // action that lives in the top row — see `canvas_bottom_reclaim_test`'s
+    // A1/A2.
     expect(find.byKey(const Key('face-rail-add')), findsNothing);
 
     await tester.tap(find.byKey(const Key('face-rail-map')));
@@ -340,7 +338,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: () {},
             colors: MasiColors.of(context),
           ),
         ),
@@ -349,7 +346,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('face-rail-map')), findsNothing);
-    expect(find.byKey(const Key('face-rail-add')), findsOneWidget);
+    expect(find.byKey(const Key('face-rail-add')), findsNothing);
   });
 
   testWidgets('long-pressing a tile raises the manage actions the strip tiles '
@@ -371,7 +368,6 @@ void main() {
             onSelect: (_) {},
             onManage: (photo) => managed = photo,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -412,7 +408,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -668,7 +663,6 @@ void main() {
             onSelect: (_) {},
             onManage: null,
             onOpenMap: null,
-            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),

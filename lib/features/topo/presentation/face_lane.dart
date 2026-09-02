@@ -10,7 +10,6 @@ import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
 import 'package:masi/features/topo/presentation/photo_preview.dart';
 import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
-import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The reader's way round a rock with several photos: **the photos
 /// themselves**, in a rail across the top of the dock.
@@ -56,7 +55,6 @@ class FaceRail extends StatelessWidget {
     required this.onSelect,
     required this.onManage,
     required this.onOpenMap,
-    required this.onAddPhoto,
     required this.colors,
   });
 
@@ -74,9 +72,6 @@ class FaceRail extends StatelessWidget {
   /// Opens the plan view. Null when there is no usable baseline to draw —
   /// a tile that opens an empty box is worse than no tile.
   final VoidCallback? onOpenMap;
-
-  /// Adds another photo of this rock. Null when read-only.
-  final VoidCallback? onAddPhoto;
 
   final MasiColors colors;
 
@@ -142,18 +137,6 @@ class FaceRail extends StatelessWidget {
               ),
             ],
           for (var i = 0; i < ordered.length; i++) _faceTile(ordered[i], i),
-          if (onAddPhoto case final add?)
-            _RailTile(
-              key: const Key('face-rail-add'),
-              caption: 'Add',
-              size: tile,
-              onTap: add,
-              colors: colors,
-              accentOutline: true,
-              child: Center(
-                child: MasiIcon('add', size: 20, color: colors.accent),
-              ),
-            ),
         ],
       ),
     );
@@ -225,7 +208,6 @@ class _RailTile extends StatelessWidget {
     this.onLongPress,
     this.selected = false,
     this.captionStrong = false,
-    this.accentOutline = false,
   });
 
   final String caption;
@@ -236,7 +218,6 @@ class _RailTile extends StatelessWidget {
   final Widget child;
   final bool selected;
   final bool captionStrong;
-  final bool accentOutline;
 
   @override
   Widget build(BuildContext context) {
@@ -271,11 +252,7 @@ class _RailTile extends StatelessWidget {
               foregroundDecoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(MasiRadii.control),
                 border: Border.all(
-                  color: selected
-                      ? colors.accent
-                      : (accentOutline
-                            ? colors.accent.withValues(alpha: 0.5)
-                            : colors.separator),
+                  color: selected ? colors.accent : colors.separator,
                   width: selected ? 2 : 1,
                 ),
               ),

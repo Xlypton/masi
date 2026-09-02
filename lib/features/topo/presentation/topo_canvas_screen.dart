@@ -2647,31 +2647,31 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
-    // Adding a photo. It has moved three times, and this is the one rule that
+    // Adding a photo. It has moved four times, and this is the one rule that
     // survived every move: there is EXACTLY ONE add-photo affordance on a
     // canvas that has a photo (see `canvas_bottom_reclaim_test.dart`). It was
     // a bottom-right FAB, then the '+' tile at the end of the 52px photo
     // strip — right beside the thumbnails it added to — then up here, because
     // the strip had become a row of 7px dots and a dot row has nothing you
-    // can append a '+' to that still reads as "add a photo".
+    // can append a '+' to that still reads as "add a photo". The face rail
+    // put real thumbnails back, so it went back beside them.
     //
-    // The rail put real thumbnails back, so the '+' belongs beside them again
-    // and lives in the rail on any wall that HAS one. This button is what a
-    // single-photo wall gets instead — the rail needs two faces to appear at
-    // all, so the two are mutually exclusive rather than competing.
+    // It is up here again, and now in EDIT mode only (user request,
+    // 2026-09-02: "the plus icon at the end of the image roll should only be
+    // there in edit mode"). The rail is the surface you page through while
+    // READING a topo — every tile on it selects a face, and one tile at the
+    // end that opens the camera instead is the odd one out at exactly the
+    // moment a thumb is flicking past it. Adding a photo of the rock is
+    // building the topo, so it belongs with the other building tools, and the
+    // rule that replaces the old rail-vs-button split is simpler than it was:
+    // read mode navigates faces, edit mode changes them.
     //
     // It is NOT a floating bottom-right button, which is where design 4c
     // draws it and where this first put it back. That corner belongs to the
     // route legend: a FAB there sits over the per-route menu buttons and
     // silently swallows their taps — the control still painted, still found
     // by a test, and simply not reachable.
-    final railCarriesAdd =
-        !widget.embedded &&
-        (ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ?? 0) >=
-            2;
-    if (drawState.mode == DrawMode.view &&
-        !widget.readOnly &&
-        !railCarriesAdd) {
+    if (drawState.mode == DrawMode.draw && !widget.readOnly) {
       actions.add(
         IconButton(
           key: const Key('topo-add-photo-button'),
@@ -3344,7 +3344,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       onSelectFace: _switchToPhoto,
       onManageFace: widget.readOnly ? null : _showFaceMenu,
       onOpenFaceMap: () => _openFaceMap(facePhotos),
-      onAddPhoto: widget.readOnly ? null : _pickImage,
       transformationController: _transformationController,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
@@ -3408,7 +3407,6 @@ class TopoCanvasBody extends ConsumerWidget {
     this.onSelectFace,
     this.onManageFace,
     this.onOpenFaceMap,
-    this.onAddPhoto,
   });
 
   /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
@@ -3511,7 +3509,6 @@ class TopoCanvasBody extends ConsumerWidget {
   /// which has nothing you can append a '+' to that still reads as "add a
   /// photo". With real thumbnails back in the rail it reads correctly again,
   /// right beside the tiles it adds to.
-  final VoidCallback? onAddPhoto;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3681,7 +3678,6 @@ class TopoCanvasBody extends ConsumerWidget {
                         onSelectFace: onSelectFace,
                         onManageFace: onManageFace,
                         onOpenFaceMap: onOpenFaceMap,
-                        onAddPhoto: onAddPhoto,
                         onOpenCommunity: community,
                         onLogAscent: drawState.mode == DrawMode.draw
                             ? null
@@ -3689,11 +3685,14 @@ class TopoCanvasBody extends ConsumerWidget {
                         onEditRoute: drawState.mode == DrawMode.draw
                             ? onEditRoute
                             : null,
-                        // NOT mode-gated. Noticing that a climb is the wrong
-                        // one happens while READING the legend, which is view
-                        // mode, and having to enter draw mode to correct it is
-                        // how it stayed uncorrected.
-                        onSameClimbAs: onSameClimbAs,
+                        // Mode-gated with the pair above (user request,
+                        // 2026-09-02): merging two rows into one climb is an
+                        // edit, and a destructive one — it tombstones a route
+                        // — so it belongs beside the other edits rather than
+                        // one tap away from a reader who only meant to look.
+                        onSameClimbAs: drawState.mode == DrawMode.draw
+                            ? onSameClimbAs
+                            : null,
                       ),
                     )
                   else ...[
@@ -3774,7 +3773,12 @@ class TopoCanvasBody extends ConsumerWidget {
                                             drawState.mode == DrawMode.draw
                                             ? onEditRoute
                                             : null,
-                                        onSameClimbAs: onSameClimbAs,
+                                        // Edit-mode only, same reasoning as
+                                        // onEditRoute above.
+                                        onSameClimbAs:
+                                            drawState.mode == DrawMode.draw
+                                            ? onSameClimbAs
+                                            : null,
                                       ),
                                       if (community != null)
                                         _CommunityRow(onTap: community),
@@ -3931,19 +3935,15 @@ class _LegendChip extends StatelessWidget {
         horizontal: MasiSpacing.md,
         vertical: MasiSpacing.sm,
       ),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      child: _PanelSwipe(
         onTap: onExpand,
-        // An upward flick expands, the same gesture that works on the
+        // An upward swipe expands, the same gesture that works on the
         // expanded card's handle — so "drag this panel up for more" is one
         // rule across both of its states rather than a tap-only chip and a
-        // draggable card.
-        onVerticalDragEnd: (details) {
-          if (details.primaryVelocity != null &&
-              details.primaryVelocity! < -_kPanelFlickVelocity) {
-            onExpand();
-          }
-        },
+        // draggable card. The chip keeps its tap: unlike the header it is a
+        // pill that reads as a button, and it carries no other control a tap
+        // could be meant for.
+        onUp: onExpand,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3972,6 +3972,81 @@ class _LegendChip extends StatelessWidget {
 /// (`_minFlingVelocity` is 700 in `bottom_sheet.dart`); 300 is deliberately
 /// lower because this panel is small and its drags are short.
 const double _kPanelFlickVelocity = 300;
+
+/// How far a SLOW drag has to travel to mean the same thing a flick means.
+///
+/// Velocity alone was enough while a chevron sat beside the handle: a drag
+/// that ended too gently simply did nothing and the button was still there to
+/// tap. The buttons are gone (user request, 2026-09-02 — "don't need the
+/// little chevron on the routes component, only rely on the up or down
+/// swipe"), so a gesture that fails on a deliberate, unhurried pull would now
+/// leave the panel with no way to open at all. 24px is past any tap's slop and
+/// well under the panel's own height.
+const double _kPanelDragDistance = 24;
+
+/// A vertical swipe target for the route panel: reports at most one [onUp] or
+/// [onDown] per drag, on either a flick or a slow drag past
+/// [_kPanelDragDistance].
+///
+/// Stateful because "how far has this drag travelled" is state, and every
+/// surface of the panel — the expanded card's handle, the collapsed chip, the
+/// dock's lane — needs the same answer. Sharing one widget is also what keeps
+/// the gesture meaning ONE thing across all three: down closes, up opens.
+class _PanelSwipe extends StatefulWidget {
+  const _PanelSwipe({
+    super.key,
+    required this.child,
+    this.onUp,
+    this.onDown,
+    this.onTap,
+  });
+
+  final Widget child;
+
+  /// Null means an upward swipe does nothing here (e.g. a wall with no
+  /// community page to reach), rather than dead-ending somewhere.
+  final VoidCallback? onUp;
+  final VoidCallback? onDown;
+
+  /// Only the collapsed chip wants one: it is a pill that reads as a button.
+  /// The expanded card's header deliberately has none — a row that both drags
+  /// and swallows taps is how you collapse a panel you meant to pull.
+  final VoidCallback? onTap;
+
+  @override
+  State<_PanelSwipe> createState() => _PanelSwipeState();
+}
+
+class _PanelSwipeState extends State<_PanelSwipe> {
+  double _travel = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    // No key on the GestureDetector: this widget already carries the caller's,
+    // and repeating it makes every `find.byKey` ambiguous.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      onVerticalDragStart: (_) => _travel = 0,
+      onVerticalDragUpdate: (details) => _travel += details.primaryDelta ?? 0,
+      onVerticalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        final travel = _travel;
+        _travel = 0;
+        if (velocity > _kPanelFlickVelocity ||
+            (velocity.abs() <= _kPanelFlickVelocity &&
+                travel > _kPanelDragDistance)) {
+          widget.onDown?.call();
+        } else if (velocity < -_kPanelFlickVelocity ||
+            (velocity.abs() <= _kPanelFlickVelocity &&
+                travel < -_kPanelDragDistance)) {
+          widget.onUp?.call();
+        }
+      },
+      child: widget.child,
+    );
+  }
+}
 
 /// The full-width "Comments & ascents" row at the foot of the expanded route
 /// panel — the visible half of what replaced the top row's speech-bubble
@@ -4073,7 +4148,7 @@ class _CommunityChip extends StatelessWidget {
 }
 
 /// The expanded route panel's header: a grab handle, the route count, and a
-/// collapse chevron. Lives INSIDE the card's own
+/// Lives INSIDE the card's own
 /// `Material(type: transparency)` (see the legend-overlay build site) so its
 /// [InkWell] gets a splash.
 ///
@@ -4087,13 +4162,14 @@ class _CommunityChip extends StatelessWidget {
 ///    this wall ([onOpenCommunity]), which is the same destination as the
 ///    footer row below the list.
 ///
-/// The chevron is a real [IconButton] now rather than a decorative glyph
-/// inside a tap-anywhere row, for the other half of the same report ("the
-/// down pointing arrow is random"): it points down because down is where it
-/// puts the panel, and it is the only thing in this header that a tap acts
-/// on. Tapping the label or the handle does nothing — the header is a drag
-/// surface, and a row that both drags and swallows taps is how you collapse
-/// a panel you meant to pull.
+/// There is no chevron button any more (user request, 2026-09-02: "don't need
+/// the little chevron on the routes component, only rely on the up or down
+/// swipe"). It had already been demoted twice — from a decorative glyph in a
+/// tap-anywhere row, to the one real button in a header that is otherwise a
+/// drag surface — and the pull it duplicated now works on a slow drag as well
+/// as a flick (see [_PanelSwipe]), which is what made it safe to remove
+/// rather than merely tidy. The grab handle stays: it is the thing that says
+/// the panel pulls, and it is drawn, not tapped.
 class _LegendHeader extends StatelessWidget {
   const _LegendHeader({
     required this.routeCount,
@@ -4113,18 +4189,10 @@ class _LegendHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final community = onOpenCommunity;
-    return GestureDetector(
+    return _PanelSwipe(
       key: const Key('topo-route-legend-handle'),
-      behavior: HitTestBehavior.opaque,
-      onVerticalDragEnd: (details) {
-        final velocity = details.primaryVelocity;
-        if (velocity == null) return;
-        if (velocity > _kPanelFlickVelocity) {
-          onCollapse();
-        } else if (velocity < -_kPanelFlickVelocity && community != null) {
-          community();
-        }
-      },
+      onDown: onCollapse,
+      onUp: community,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           MasiSpacing.sm,
@@ -4157,20 +4225,6 @@ class _LegendHeader extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                const Spacer(),
-                IconButton(
-                  key: const Key('topo-route-legend-collapse'),
-                  tooltip: 'Collapse the route list',
-                  onPressed: onCollapse,
-                  iconSize: 18,
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(
-                    minWidth: 36,
-                    minHeight: 36,
-                  ),
-                  icon: MasiIcon('chevron_down', size: 18, color: colors.ink),
                 ),
               ],
             ),
@@ -4223,7 +4277,6 @@ class _TopoDock extends StatelessWidget {
     required this.onSelectFace,
     required this.onManageFace,
     required this.onOpenFaceMap,
-    required this.onAddPhoto,
     required this.onOpenCommunity,
     required this.onLogAscent,
     required this.onEditRoute,
@@ -4244,7 +4297,6 @@ class _TopoDock extends StatelessWidget {
   final void Function(PhotoRef photo)? onSelectFace;
   final void Function(PhotoRef photo)? onManageFace;
   final VoidCallback? onOpenFaceMap;
-  final VoidCallback? onAddPhoto;
   final VoidCallback? onOpenCommunity;
   final void Function(int routeId)? onLogAscent;
   final void Function(int routeId)? onEditRoute;
@@ -4282,7 +4334,6 @@ class _TopoDock extends StatelessWidget {
               colors: colors,
               onToggleExpanded: onToggleExpanded,
               onOpenMap: planAvailable ? onOpenFaceMap : null,
-              onAddPhoto: onAddPhoto,
               onSelect: select,
               onManage: onManageFace,
               onOpenCommunity: onOpenCommunity,
@@ -4338,7 +4389,6 @@ class _DockLane extends StatelessWidget {
     required this.colors,
     required this.onToggleExpanded,
     required this.onOpenMap,
-    required this.onAddPhoto,
     required this.onSelect,
     required this.onManage,
     required this.onOpenCommunity,
@@ -4353,7 +4403,6 @@ class _DockLane extends StatelessWidget {
   final MasiColors colors;
   final VoidCallback onToggleExpanded;
   final VoidCallback? onOpenMap;
-  final VoidCallback? onAddPhoto;
   final void Function(PhotoRef photo) onSelect;
   final void Function(PhotoRef photo)? onManage;
   final VoidCallback? onOpenCommunity;
@@ -4363,23 +4412,19 @@ class _DockLane extends StatelessWidget {
     final community = onOpenCommunity;
     final canExpand = routeCount > 0 || community != null;
 
-    return GestureDetector(
+    return _PanelSwipe(
       key: const Key('topo-dock-lane'),
-      behavior: HitTestBehavior.opaque,
-      // The same three-way flick the panel had before the lane existed, kept
-      // verbatim so the gesture means one thing across every state of this
-      // surface: down closes, up opens, up again reaches the community page.
-      onVerticalDragEnd: (details) {
-        final velocity = details.primaryVelocity;
-        if (velocity == null) return;
-        if (velocity > _kPanelFlickVelocity) {
-          if (expanded) onToggleExpanded();
-        } else if (velocity < -_kPanelFlickVelocity) {
-          if (!expanded) {
-            onToggleExpanded();
-          } else if (community != null) {
-            community();
-          }
+      // The same three-way swipe the panel had before the lane existed, so
+      // the gesture means one thing across every state of this surface: down
+      // closes, up opens, up again reaches the community page. It is the ONLY
+      // way to open the list now that the count's chevron is gone, which is
+      // why it answers to a slow drag as well as a flick.
+      onDown: expanded ? onToggleExpanded : null,
+      onUp: () {
+        if (!expanded) {
+          if (canExpand) onToggleExpanded();
+        } else if (community != null) {
+          community();
         }
       },
       child: Padding(
@@ -4414,14 +4459,33 @@ class _DockLane extends StatelessWidget {
                     onSelect: onSelect,
                     onManage: onManage,
                     onOpenMap: onOpenMap,
-                    onAddPhoto: onAddPhoto,
                     colors: colors,
                   ),
                 ),
-                if (canExpand)
-                  GestureDetector(
+                if (canExpand && routeCount > 0)
+                  // A tally, not a button. Spelled out, this said '0 routes'
+                  // in most of a thumbnail's width, to name a list that names
+                  // itself the moment it opens — and it took that width from
+                  // the photos, which are what the rail is for. The chevron
+                  // that used to sit beside it is gone too (user request,
+                  // 2026-09-02): the lane is pulled open, and the grab handle
+                  // above already says so. What survives is the number, in
+                  // the quieter ink so it reads as a count of what is behind
+                  // the panel rather than as another of the rail's numbered
+                  // tiles.
+                  //
+                  // `Semantics.onTap` with no `GestureDetector` is deliberate
+                  // and is not a leftover: it declares the action for
+                  // assistive technology (which cannot perform the swipe that
+                  // replaced the button) without painting a target for a
+                  // thumb. Removing a control must not remove it from
+                  // VoiceOver too.
+                  Semantics(
                     key: const Key('topo-dock-routes-toggle'),
-                    behavior: HitTestBehavior.opaque,
+                    button: true,
+                    label:
+                        '${_routeCountLabel(routeCount)}, '
+                        '${expanded ? 'close the list' : 'open the list'}',
                     onTap: onToggleExpanded,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(
@@ -4430,39 +4494,12 @@ class _DockLane extends StatelessWidget {
                         MasiSpacing.sm,
                         MasiSpacing.sm,
                       ),
-                      child: Semantics(
-                        button: true,
-                        label:
-                            '${_routeCountLabel(routeCount)}, '
-                            '${expanded ? 'close the list' : 'open the list'}',
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Spelled out, this said '0 routes' in most of
-                            // a thumbnail's width, to name a list that names
-                            // itself the moment it opens — and it took that
-                            // width from the photos, which are what the rail
-                            // is for. What survives is the count and the
-                            // chevron that opens the list; the count is set
-                            // in the quieter ink so it reads as a tally
-                            // against the chevron rather than as another of
-                            // the rail's numbered tiles.
-                            if (routeCount > 0) ...[
-                              Text(
-                                '$routeCount',
-                                style: Theme.of(context).textTheme.labelMedium
-                                    ?.copyWith(color: colors.ink2),
-                                maxLines: 1,
-                              ),
-                              const SizedBox(width: 3),
-                            ],
-                            MasiIcon(
-                              expanded ? 'chevron_down' : 'chevron_up',
-                              size: 18,
-                              color: colors.ink,
-                            ),
-                          ],
-                        ),
+                      child: Text(
+                        '$routeCount',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelMedium?.copyWith(color: colors.ink2),
+                        maxLines: 1,
                       ),
                     ),
                   ),

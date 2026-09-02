@@ -1,3 +1,4 @@
+import 'package:flutter/semantics.dart' show SemanticsAction;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Baseline;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -110,8 +111,17 @@ void main() {
   /// Opens the dock's body. Closed is the DEFAULT now — one line, so the photo
   /// keeps the screen — which is why every assertion about the route list has
   /// to ask for it first.
+  /// Opens the dock's body the only way a thumb can now: an upward swipe on
+  /// the lane. The count's chevron used to be a button and is not one any more
+  /// (user request, 2026-09-02 — "don't need the little chevron on the routes
+  /// component, only rely on the up or down swipe"), so every test that needs
+  /// the list open goes through the gesture the user goes through.
   Future<void> openBody(WidgetTester tester) async {
-    await tester.tap(find.byKey(const Key('topo-dock-routes-toggle')));
+    await tester.fling(
+      find.byKey(const Key('topo-dock-lane')),
+      const Offset(0, -120),
+      1000,
+    );
     await tester.pumpAndSettle();
   }
 
@@ -230,7 +240,12 @@ void main() {
     await pumpDock(tester);
     await openBody(tester);
 
-    await tester.tap(find.byKey(const Key('topo-dock-routes-toggle')));
+    // Down closes, the mirror of the swipe that opened it.
+    await tester.fling(
+      find.byKey(const Key('topo-dock-lane')),
+      const Offset(0, 120),
+      1000,
+    );
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('topo-dock-routes')), findsNothing);
@@ -241,6 +256,32 @@ void main() {
     );
     expect(find.byKey(const Key('topo-dock')), findsOneWidget);
   });
+
+  testWidgets(
+    'the count carries no chevron and no tap target — but it still offers '
+    'the action to a screen reader, which cannot perform a swipe',
+    (tester) async {
+      await pumpDock(tester);
+
+      final toggle = find.byKey(const Key('topo-dock-routes-toggle'));
+      expect(toggle, findsOneWidget, reason: 'the tally is still there');
+      expect(
+        find.descendant(of: toggle, matching: find.byType(GestureDetector)),
+        findsNothing,
+        reason: 'nothing up here answers a tap any more',
+      );
+
+      final handle = tester.getSemantics(toggle);
+      expect(
+        handle.getSemanticsData().hasAction(SemanticsAction.tap),
+        isTrue,
+        reason:
+            'removing a control must not remove it from VoiceOver: the '
+            'gesture that replaced it is one assistive technology cannot '
+            'make',
+      );
+    },
+  );
 
   testWidgets('a wall with routes but no faces keeps the plain floating '
       'panel it always had', (tester) async {
