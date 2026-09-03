@@ -40,6 +40,7 @@ UIDS="'$E2E_OWNER_UID','$E2E_READER_UID','$E2E_ADMIN_UID'"
 # fixture) is cleaned up too.
 E2E_WALLS="SELECT id FROM public.walls WHERE \"ownerId\" IN ($UIDS)"
 E2E_ROUTES="SELECT id FROM public.routes WHERE \"ownerId\" IN ($UIDS)"
+E2E_PHOTOS="SELECT id FROM public.photos WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS)"
 
 if [[ "$QUIET" == "0" ]]; then
   echo "==> real (non-E2E) row counts BEFORE"
@@ -71,6 +72,13 @@ DELETE FROM public.comments WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_
 DELETE FROM public.ascents  WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 
 -- The library itself. wall_moderation before walls: it is keyed on wallId.
+-- route_lines before routes and photos: it points at BOTH. It carries no
+-- wallId of its own, so it is filtered on its own ownerId plus the routes and
+-- photos about to go — a line drawn THROUGH THE APP during a run is owned by
+-- the climb it belongs to, which is not necessarily the account that drew it.
+-- This table held zero rows until the push gap was fixed, which is why the
+-- sweep predates it; a run now genuinely writes here.
+DELETE FROM public.route_lines     WHERE \"ownerId\" IN ($UIDS) OR \"routeId\" IN ($E2E_ROUTES) OR \"photoId\" IN ($E2E_PHOTOS);
 DELETE FROM public.routes          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.photos          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.wall_moderation WHERE \"wallId\"  IN ($E2E_WALLS);
@@ -127,6 +135,7 @@ LEFTOVER="$(sql "SELECT
 + (SELECT count(*) FROM public.sectors WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.walls   WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.routes  WHERE \"ownerId\" IN ($UIDS))
++ (SELECT count(*) FROM public.route_lines WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.photos  WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.content_reports WHERE \"reporterId\" IN ($UIDS))
 + (SELECT count(*) FROM public.topo_edit_suggestions WHERE \"authorId\" IN ($UIDS)) AS n;" \
