@@ -616,6 +616,11 @@ class SyncService {
     late List<db.Wall> walls;
     late List<db.Photo> photos;
     late List<db.Route> routes;
+    // The same climb drawn on a SECOND photo. A sync table like any other
+    // (it is in `syncTableNames`, in `syncRequiredFields`, in the backup
+    // snapshot, and in the remote schema with its own RLS) — it was simply
+    // missing from `tablesToRows` below, so it was pulled and never pushed.
+    late List<db.RouteLine> routeLines;
     late List<db.Comment> comments;
     late List<db.Like> likes;
     late List<db.Ascent> ascents;
@@ -634,6 +639,7 @@ class SyncService {
       walls = await (_db.select(_db.walls)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       photos = await (_db.select(_db.photos)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       routes = await (_db.select(_db.routes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      routeLines = await (_db.select(_db.routeLines)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       comments = await (_db.select(_db.comments)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       likes = await (_db.select(_db.likes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       ascents = await (_db.select(_db.ascents)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
@@ -759,6 +765,43 @@ class SyncService {
         if (!pushedPhotoIds.contains(photo.id)) photo.id,
     };
 
+    // Hoisted out of the `tablesToRows` literal for the same reason
+    // `photoRows` was: `route_lines` now depends on which routes actually
+    // survived. A route may not be pushed ahead of the photo it points at
+    // (see [routesWithResolvablePhoto]).
+    final routeRows = guard(
+      'routes',
+      routesWithResolvablePhoto(
+        routes: [
+          for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
+        ],
+        withheldPhotoIds: withheldPhotoIds,
+        onWithheld: (routeId, photoId) {
+          rowsFailed += 1;
+          errors.add(
+            'routes: route $routeId withheld — its photo $photoId was held '
+            'back by this same push, so pushing the route would publish a '
+            'line pointing at a photo row that does not exist',
+          );
+        },
+      ),
+    );
+
+    // Routes offered to THIS push that are not going to land — held back
+    // above for a withheld photo, or dropped by the required-field guard.
+    // Differenced against the candidate set for the same reason
+    // `withheldPhotoIds` is: a route absent under [PushScope.dirtyOnly]
+    // because it is clean is NOT withheld, and treating it as such would
+    // stop a newly drawn second line from ever syncing.
+    final pushedRouteIds = {
+      for (final row in routeRows)
+        if (row['id'] case final String id) id,
+    };
+    final withheldRouteIds = <String>{
+      for (final route in routes)
+        if (!pushedRouteIds.contains(route.id)) route.id,
+    };
+
     final tablesToRows = <String, List<Map<String, dynamic>>>{
       'profiles': guard('profiles', [
         for (final row in profiles) stripLocalOnlySyncColumns(row.toJson()),
@@ -776,21 +819,23 @@ class SyncService {
       // push is withheld from the metadata upsert (S5 — see the
       // bytes-before-metadata block above). Computed above as `photoRows`.
       'photos': photoRows,
-      // Filtered before the field guard: a route may not be pushed ahead of
-      // the photo it points at (see [routesWithResolvablePhoto]).
-      'routes': guard(
-        'routes',
-        routesWithResolvablePhoto(
-          routes: [
-            for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
+      'routes': routeRows,
+      // Withheld from two directions — see [routeLinesWithResolvableParents].
+      'route_lines': guard(
+        'route_lines',
+        routeLinesWithResolvableParents(
+          routeLines: [
+            for (final row in routeLines)
+              stripLocalOnlySyncColumns(row.toJson()),
           ],
           withheldPhotoIds: withheldPhotoIds,
-          onWithheld: (routeId, photoId) {
+          withheldRouteIds: withheldRouteIds,
+          onWithheld: (lineId, parent, parentId) {
             rowsFailed += 1;
             errors.add(
-              'routes: route $routeId withheld — its photo $photoId was held '
-              'back by this same push, so pushing the route would publish a '
-              'line pointing at a photo row that does not exist',
+              'route_lines: line $lineId withheld — its $parent $parentId was '
+              'held back by this same push, so pushing the line would publish '
+              'geometry pointing at a $parent row that does not exist',
             );
           },
         ),
@@ -1023,6 +1068,17 @@ class SyncService {
                     t.dirty.equals(true),
               ))
             .write(const db.RoutesCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['route_lines'],
+        (ids, updatedAt) => (_db.update(_db.routeLines)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.RouteLinesCompanion(dirty: Value(false))),
       );
       await _clearDirtyRows(
         tablesToRows['ascents'],

@@ -444,6 +444,117 @@ void main() {
   // the S5 bytes-before-metadata rule was routinely followed by the routes
   // that point at it going up anyway.
   // ---------------------------------------------------------------------
+  // ---------------------------------------------------------------------
+  // `route_lines` is the only sync table with TWO parents, and it spent a
+  // long time not being pushed at all: it was in `syncTableNames`, in
+  // `syncRequiredFields`, in the backup snapshot and in the remote schema
+  // with its own RLS — but had no key in `pushOwn`'s `tablesToRows`, and
+  // `upsertOwnRows` skips a missing key with a bare `continue`. So a climb
+  // drawn on a second photo was pulled, exported and rendered locally, and
+  // never once uploaded. Silently, in both directions.
+  // ---------------------------------------------------------------------
+  group('routeLinesWithResolvableParents', () {
+    Map<String, dynamic> line(String id, String routeId, String photoId) =>
+        {'id': id, 'routeId': routeId, 'photoId': photoId};
+
+    test('withholds a line whose PHOTO this push held back', () {
+      final withheld = <String>[];
+      final kept = routeLinesWithResolvableParents(
+        routeLines: [line('l1', 'r1', 'p1'), line('l2', 'r1', 'p2')],
+        withheldPhotoIds: {'p1'},
+        withheldRouteIds: const {},
+        onWithheld: (id, parent, parentId) =>
+            withheld.add('$id->$parent:$parentId'),
+      );
+
+      expect(kept.map((l) => l['id']), ['l2']);
+      expect(withheld, ['l1->photo:p1']);
+    });
+
+    test('withholds a line whose ROUTE this push held back — the second-order '
+        'case the photo check alone cannot see', () {
+      // This is the one that matters and the one a single-parent guard
+      // misses. A route is itself withheld when ITS photo was held back, so
+      // one photo whose bytes did not land can orphan a line drawn on a
+      // completely different, perfectly healthy photo.
+      final withheld = <String>[];
+      final kept = routeLinesWithResolvableParents(
+        routeLines: [line('l1', 'r1', 'p-healthy')],
+        withheldPhotoIds: const {},
+        withheldRouteIds: {'r1'},
+        onWithheld: (id, parent, parentId) =>
+            withheld.add('$id->$parent:$parentId'),
+      );
+
+      expect(kept, isEmpty);
+      expect(withheld, ['l1->route:r1']);
+    });
+
+    test('the server will not catch what this misses', () {
+      // Stated as a test because it is the reason this guard exists at all:
+      // `public.route_lines` declares routeId/photoId as bare TEXT NOT NULL
+      // with NO REFERENCES clause, so Postgres accepts an orphan line without
+      // complaint. The local table DOES carry both FKs, so the failure lands
+      // on whichever device pulls it next — far from the push that caused it.
+      final kept = routeLinesWithResolvableParents(
+        routeLines: [line('l1', 'r-gone', 'p-gone')],
+        withheldPhotoIds: {'p-gone'},
+        withheldRouteIds: {'r-gone'},
+      );
+
+      expect(kept, isEmpty,
+          reason: 'withheld once, re-sent by the next full push (D-4)');
+    });
+
+    test('is a no-op when neither parent set holds anything back', () {
+      final lines = [line('l1', 'r1', 'p1'), line('l2', 'r2', 'p2')];
+      var called = 0;
+
+      final kept = routeLinesWithResolvableParents(
+        routeLines: lines,
+        withheldPhotoIds: const {},
+        withheldRouteIds: const {},
+        onWithheld: (_, _, _) => called++,
+      );
+
+      expect(identical(kept, lines), isTrue,
+          reason: 'the overwhelmingly common push returns the original list '
+              'without copying it');
+      expect(called, 0);
+    });
+
+    test('a parent merely ABSENT from the push is not a reason to withhold',
+        () {
+      // The dirtyOnly hazard, inherited from the sibling guard: a clean,
+      // long-since-synced route and photo are both absent by design, and
+      // treating absence as danger would stop a newly drawn second line —
+      // the exact row this whole fix exists to deliver — from ever syncing.
+      final kept = routeLinesWithResolvableParents(
+        routeLines: [line('l1', 'route-synced-last-week', 'photo-ditto')],
+        withheldPhotoIds: {'some-other-photo'},
+        withheldRouteIds: {'some-other-route'},
+      );
+
+      expect(kept.map((l) => l['id']), ['l1']);
+    });
+
+    test('a line with a null or non-String parent id is kept, and left to the '
+        'required-field guard', () {
+      final kept = routeLinesWithResolvableParents(
+        routeLines: [
+          {'id': 'l1', 'routeId': null, 'photoId': null},
+          {'id': 'l2'},
+        ],
+        withheldPhotoIds: {'p1'},
+        withheldRouteIds: {'r1'},
+      );
+
+      expect(kept.map((l) => l['id']), ['l1', 'l2'],
+          reason: 'one guard, one question — a malformed row is '
+              'syncRequiredFields\' job.');
+    });
+  });
+
   group('routesWithResolvablePhoto', () {
     Map<String, dynamic> route(String id, String photoId) =>
         {'id': id, 'photoId': photoId, 'wallId': 'w1'};

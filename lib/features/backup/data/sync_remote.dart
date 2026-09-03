@@ -704,6 +704,55 @@ List<Map<String, dynamic>> routesWithResolvablePhoto({
   return kept;
 }
 
+/// The subset of [routeLines] safe to push, given the [withheldPhotoIds] and
+/// [withheldRouteIds] this same push is NOT going to put on the server.
+///
+/// The two-parent sibling of [routesWithResolvablePhoto], and it needs both
+/// sets rather than one: `route_lines` points at a photo AND at the climb the
+/// line depicts, so it is the only sync table that can be orphaned from two
+/// directions. A withheld photo strands a line exactly as it strands a route;
+/// a withheld ROUTE is the second-order case, because a route is itself
+/// withheld when its own photo is held back — so one photo whose bytes did not
+/// land can orphan a line drawn on a completely different, perfectly healthy
+/// photo.
+///
+/// UNLIKE `routes`, THE SERVER WILL NOT CATCH THIS. `public.route_lines`
+/// declares `routeId`/`photoId` as bare `TEXT NOT NULL` with no `REFERENCES`
+/// clause, so an orphan line is accepted by Postgres without complaint and
+/// only surfaces later, on a device that pulls it: the local `route_lines`
+/// table DOES carry both FKs, so the import that finally rejects it is the
+/// first thing to notice. That is why the guard belongs here rather than being
+/// left to the database.
+///
+/// Same bounded scope as its sibling: it withholds a line whose parent was
+/// offered to THIS push and rejected by it, and says nothing about a parent
+/// absent from the push because it is clean under [PushScope.dirtyOnly].
+/// Withholding costs nothing permanent — the next full push re-reads and
+/// re-sends the line (decision D-4, no outbox).
+List<Map<String, dynamic>> routeLinesWithResolvableParents({
+  required List<Map<String, dynamic>> routeLines,
+  required Set<String> withheldPhotoIds,
+  required Set<String> withheldRouteIds,
+  void Function(String lineId, String parent, String parentId)? onWithheld,
+}) {
+  if (withheldPhotoIds.isEmpty && withheldRouteIds.isEmpty) return routeLines;
+  final kept = <Map<String, dynamic>>[];
+  for (final line in routeLines) {
+    final photoId = line['photoId'];
+    if (photoId is String && withheldPhotoIds.contains(photoId)) {
+      onWithheld?.call('${line['id']}', 'photo', photoId);
+      continue;
+    }
+    final routeId = line['routeId'];
+    if (routeId is String && withheldRouteIds.contains(routeId)) {
+      onWithheld?.call('${line['id']}', 'route', routeId);
+      continue;
+    }
+    kept.add(line);
+  }
+  return kept;
+}
+
 /// True when a LOCAL row (with `updatedAt` [localUpdatedAt]) should be
 /// pushed up to the cloud, given the cloud's current `updatedAt` for that
 /// same row ([remoteUpdatedAt], `null` if no cloud row exists yet) — i.e. a
