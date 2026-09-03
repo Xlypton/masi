@@ -4,12 +4,13 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'deferred_route.dart';
 import 'is_safari.dart';
 import 'nav_shell.dart';
 import '../features/account/application/auth_providers.dart';
 import '../features/account/data/auth_repository.dart';
 import '../features/account/presentation/account_screen.dart';
-import '../features/ar/presentation/ar_screen.dart';
+import '../features/ar/presentation/ar_screen.dart' deferred as ar_screen;
 import '../features/community/presentation/ascent_detail_screen.dart';
 import '../features/community/presentation/community_screen.dart';
 import '../features/community/presentation/community_topo_detail_screen.dart';
@@ -17,9 +18,12 @@ import '../features/library/presentation/areas_screen.dart';
 import '../features/library/presentation/sectors_screen.dart';
 import '../features/library/presentation/topos_screen.dart';
 import '../features/library/presentation/walls_screen.dart';
-import '../features/moderation/presentation/admin_queue_screen.dart';
-import '../features/moderation/presentation/propose_line_screen.dart';
-import '../features/moderation/presentation/suggestions_inbox_screen.dart';
+import '../features/moderation/presentation/admin_queue_screen.dart'
+    deferred as admin_queue_screen;
+import '../features/moderation/presentation/propose_line_screen.dart'
+    deferred as propose_line_screen;
+import '../features/moderation/presentation/suggestions_inbox_screen.dart'
+    deferred as suggestions_inbox_screen;
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/notifications/presentation/notifications_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
@@ -326,7 +330,11 @@ final appRouter = GoRouter(
     // route grants nothing.
     GoRoute(
       path: '/admin',
-      builder: (context, state) => const AdminQueueScreen(),
+      builder: (context, state) => DeferredRoute(
+        name: 'moderation/admin_queue',
+        load: admin_queue_screen.loadLibrary,
+        builder: (_) => admin_queue_screen.AdminQueueScreen(),
+      ),
     ),
     // The owner's inbox of suggested edits (community editing phase 7a).
     // Unguarded like `/admin`, and for a stronger reason: this route shows
@@ -334,7 +342,11 @@ final appRouter = GoRouter(
     // the caller owns, so reaching it as anyone else shows an empty list.
     GoRoute(
       path: '/suggestions',
-      builder: (context, state) => const SuggestionsInboxScreen(),
+      builder: (context, state) => DeferredRoute(
+        name: 'moderation/suggestions_inbox',
+        load: suggestions_inbox_screen.loadLibrary,
+        builder: (_) => suggestions_inbox_screen.SuggestionsInboxScreen(),
+      ),
     ),
     // Drawing a line on somebody else's published topo (community editing
     // phase 7b). Unguarded for the same reason as the two routes above:
@@ -343,9 +355,13 @@ final appRouter = GoRouter(
     // public, so reaching this route by hand achieves nothing a tap could not.
     GoRoute(
       path: '/walls/:wallId/propose-line',
-      builder: (context, state) => ProposeLineScreen(
-        wallId: state.pathParameters['wallId']!,
-        topoName: state.extra as String?,
+      builder: (context, state) => DeferredRoute(
+        name: 'moderation/propose_line',
+        load: propose_line_screen.loadLibrary,
+        builder: (_) => propose_line_screen.ProposeLineScreen(
+          wallId: state.pathParameters['wallId']!,
+          topoName: state.extra as String?,
+        ),
       ),
     ),
     GoRoute(path: '/areas', builder: (context, state) => const AreasScreen()),
@@ -403,8 +419,12 @@ final appRouter = GoRouter(
     // native-camera-vs-overlay platform split.
     GoRoute(
       path: '/walls/:wallId/ar',
-      builder: (context, state) =>
-          ArScreen(wallId: state.pathParameters['wallId']!),
+      builder: (context, state) => DeferredRoute(
+        name: 'ar/ar_screen',
+        load: ar_screen.loadLibrary,
+        builder: (_) =>
+            ar_screen.ArScreen(wallId: state.pathParameters['wallId']!),
+      ),
     ),
   ],
 );
