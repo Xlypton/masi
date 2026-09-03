@@ -37,7 +37,6 @@ import '../shared/presentation/masi_icon.dart';
 ///     runs on the Dart VM (never web/wasm), so [kIsWeb] is permanently
 ///     `false` under test — this mirrors the identical `{bool? isWeb}` seam
 ///     already used by `photo_source_sheet.dart`'s `showCameraOption`,
-///     `community_map_screen.dart`'s `buildResilientTileProvider`,
 ///     `auth_repository.dart`, and `sync_service.dart`.
 ///  2. Something to actually go back to — [Navigator.canPop]. Never shown
 ///     on a top-level shell tab (Topos/Map/Feed — each is the root of its

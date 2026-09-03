@@ -11,12 +11,10 @@
 // So the tests here are about the two things that fixes: ONE pin per place,
 // and a way to choose between the topos behind it.
 
-import 'dart:convert';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -28,17 +26,7 @@ import 'package:masi/features/moderation/application/duplicate_providers.dart';
 import 'package:masi/features/moderation/data/duplicates_remote.dart';
 
 import '../../../support/async_drain.dart';
-
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
-
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) =>
-      MemoryImage(_tinyPngBytes);
-}
+import '../../../support/fake_basemap.dart';
 
 /// Returns the configured alternate links and records nothing else — the map
 /// must never reach the network in a widget test.
@@ -171,7 +159,7 @@ Widget _wrap(ProviderContainer container) {
       GoRoute(
         path: '/',
         builder: (_, _) =>
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
       ),
       GoRoute(
         path: '/walls/:wallId',
@@ -192,6 +180,7 @@ ProviderContainer _container(Map<String, String> links) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       duplicatesRemoteProvider.overrideWithValue(_FakeDuplicates(links)),

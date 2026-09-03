@@ -43,6 +43,7 @@ import 'package:image/src/util/rational.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../support/async_drain.dart';
+import '../../../support/fake_basemap.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64), used to give
 /// `ui.instantiateImageCodec` real bytes to decode in the "New topo" flow
@@ -173,6 +174,7 @@ ProviderContainer _makeContainer({
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       if (locationService != null)
@@ -584,13 +586,6 @@ class _ThrowingAttachPhotoRepository extends LibraryCrudRepository {
 /// its `FlutterMap`'s `TileLayer` can never attempt a real network fetch
 /// under `flutter_test` (see CLAUDE.md: "never hit the network in a widget
 /// test").
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 /// A [LibraryCrudRepository] whose [moveWall] always throws, leaving every
 /// other method backed by the real implementation against [db]. Used to
 /// prove `_handleMove`'s `await repo.moveWall(...)` is guarded: a move
@@ -2086,6 +2081,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -2146,6 +2142,7 @@ void main() {
         final missingThumbPath = '${tempDir.path}/thumbs/ghost.jpg';
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -2194,6 +2191,7 @@ void main() {
         // like. Never created, so nothing is ever handed to an image codec.
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             connectivityServiceProvider.overrideWithValue(
@@ -2258,6 +2256,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -2904,6 +2903,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             // A stream that never emits keeps toposProvider in AsyncLoading
@@ -3206,6 +3206,7 @@ void main() {
         final repo = _QuotaThenCleanupFailingRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -3272,6 +3273,7 @@ void main() {
         final repo = _QuotaThenCleanupFailingRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -3332,6 +3334,7 @@ void main() {
         final repo = _ThrowingAttachPhotoRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -3867,6 +3870,7 @@ void main() {
           );
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -3999,6 +4003,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           toposProvider.overrideWith(
@@ -4034,6 +4039,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             // A stream that never emits keeps toposProvider in AsyncLoading
@@ -4125,6 +4131,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -4204,6 +4211,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -4251,6 +4259,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           toposProvider.overrideWith(
@@ -4291,6 +4300,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             authStateProvider.overrideWith(
@@ -4321,6 +4331,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             // Never emits: authStateProvider stays AsyncLoading forever.
@@ -4351,6 +4362,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             authStateProvider.overrideWith(
@@ -4766,7 +4778,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            ToposScreen(setLocationTileProvider: _NoopTileProvider()),
+            ToposScreen(),
           ),
         );
         await _drain(tester);
@@ -4816,7 +4828,6 @@ void main() {
           _wrap(
             container,
             ToposScreen(
-              setLocationTileProvider: _NoopTileProvider(),
               setLocationMapController: controller,
             ),
           ),
@@ -4898,7 +4909,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            ToposScreen(setLocationTileProvider: _NoopTileProvider()),
+            ToposScreen(),
           ),
         );
         await _drain(tester);
@@ -4939,13 +4950,20 @@ void main() {
         late BuildContext capturedContext;
 
         await tester.pumpWidget(
-          MaterialApp(
-            theme: MasiTheme.light,
-            home: Builder(
-              builder: (context) {
-                capturedContext = context;
-                return const SizedBox();
-              },
+          // A ProviderScope even though nothing here injects a provider by
+          // hand: the picker's map draws `BasemapLayer`, which reads
+          // `basemapStyleProvider`, so an unscoped `MaterialApp` now throws
+          // "No ProviderScope found" before a single frame renders.
+          ProviderScope(
+            overrides: fakeBasemapOverrides(),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) {
+                  capturedContext = context;
+                  return const SizedBox();
+                },
+              ),
             ),
           ),
         );
@@ -4954,7 +4972,6 @@ void main() {
         // completion below, once Save is tapped.
         final pickerFuture = showSetLocationPicker(
           capturedContext,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           locationService: fakeLocation,
         );
@@ -5007,20 +5024,26 @@ void main() {
         late BuildContext capturedContext;
 
         await tester.pumpWidget(
-          MaterialApp(
-            theme: MasiTheme.light,
-            home: Builder(
-              builder: (context) {
-                capturedContext = context;
-                return const SizedBox();
-              },
+          // A ProviderScope even though nothing here injects a provider by
+          // hand: the picker's map draws `BasemapLayer`, which reads
+          // `basemapStyleProvider`, so an unscoped `MaterialApp` now throws
+          // "No ProviderScope found" before a single frame renders.
+          ProviderScope(
+            overrides: fakeBasemapOverrides(),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) {
+                  capturedContext = context;
+                  return const SizedBox();
+                },
+              ),
             ),
           ),
         );
 
         final pickerFuture = showSetLocationPicker(
           capturedContext,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
         );
         await tester.pumpAndSettle();
@@ -5094,13 +5117,20 @@ void main() {
         late BuildContext capturedContext;
 
         await tester.pumpWidget(
-          MaterialApp(
-            theme: MasiTheme.light,
-            home: Builder(
-              builder: (context) {
-                capturedContext = context;
-                return const SizedBox();
-              },
+          // A ProviderScope even though nothing here injects a provider by
+          // hand: the picker's map draws `BasemapLayer`, which reads
+          // `basemapStyleProvider`, so an unscoped `MaterialApp` now throws
+          // "No ProviderScope found" before a single frame renders.
+          ProviderScope(
+            overrides: fakeBasemapOverrides(),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) {
+                  capturedContext = context;
+                  return const SizedBox();
+                },
+              ),
             ),
           ),
         );
@@ -5108,7 +5138,6 @@ void main() {
         final pickerFuture = showSetLocationPicker(
           capturedContext,
           initial: existing,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
         );
         await tester.pumpAndSettle();
@@ -5190,6 +5219,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           toposProvider.overrideWith(
@@ -5267,6 +5297,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -5314,6 +5345,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             areasProvider.overrideWith(
@@ -5378,6 +5410,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             areasProvider.overrideWith(
@@ -5447,6 +5480,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           toposProvider.overrideWith(
@@ -5728,6 +5762,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               toposProvider.overrideWith(
@@ -5782,6 +5817,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               toposProvider.overrideWith(
@@ -5854,6 +5890,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -5906,6 +5943,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -5965,6 +6003,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               toposProvider.overrideWith(
@@ -6016,6 +6055,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -6086,6 +6126,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
@@ -6285,6 +6326,7 @@ void main() {
         final repo = _ThrowingMoveWallRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -6355,6 +6397,7 @@ void main() {
         final repo = _ThrowingListOwnSectorsRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -6409,6 +6452,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               locationServiceProvider.overrideWithValue(
@@ -6492,6 +6536,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               locationServiceProvider.overrideWithValue(
@@ -6581,6 +6626,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               locationServiceProvider.overrideWithValue(
@@ -6657,6 +6703,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               locationServiceProvider.overrideWithValue(
@@ -6758,6 +6805,7 @@ void main() {
           addTearDown(db.close);
           final container = ProviderContainer(
             overrides: [
+      ...fakeBasemapOverrides(),
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               locationServiceProvider.overrideWithValue(
@@ -6820,6 +6868,7 @@ void main() {
         final repo = _ThrowingSoftDeleteWallRepository(db, nowMs: () => 1000);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -6868,6 +6917,7 @@ void main() {
         // so the only re-run this test can observe is the manual one.
         retry: (retryCount, error) => null,
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           connectivityServiceProvider.overrideWithValue(
@@ -6915,6 +6965,7 @@ void main() {
         final container = ProviderContainer(
           retry: (retryCount, error) => null,
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             connectivityServiceProvider.overrideWithValue(
@@ -6961,6 +7012,7 @@ void main() {
         final container = ProviderContainer(
           retry: (retryCount, error) => null,
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             connectivityServiceProvider.overrideWithValue(
@@ -7019,6 +7071,7 @@ void main() {
         final container = ProviderContainer(
           retry: (retryCount, error) => null,
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             connectivityServiceProvider.overrideWithValue(
@@ -7081,6 +7134,7 @@ void main() {
       );
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -7152,6 +7206,7 @@ void main() {
       );
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           libraryCrudRepositoryProvider.overrideWithValue(repo),
@@ -7248,6 +7303,7 @@ void main() {
       final container = ProviderContainer(
         retry: (_, _) => null,
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           connectivityServiceProvider.overrideWithValue(
@@ -7461,6 +7517,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           connectivityServiceProvider.overrideWithValue(

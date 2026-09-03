@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
+import 'package:flutter_map/flutter_map.dart' show MapController;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -111,7 +111,6 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
     this.readOnly = false,
     this.embedded = false,
     @visibleForTesting this.debugInitialImageSize,
-    @visibleForTesting this.setLocationTileProvider,
     @visibleForTesting this.setLocationMapController,
     @visibleForTesting this.setLocationLocationService,
     @visibleForTesting this.photoSourcePicker = showPhotoSourceSheet,
@@ -212,14 +211,11 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
   /// in [_TopoCanvasScreenState._topTrailingActions]). Mirror
   /// `topos_screen.dart`'s identically-named `ToposScreen` fields exactly —
   /// same rationale: production (every real route to this screen) leaves
-  /// all three `null`, letting the picker build its own real tile
-  /// provider/`MapController` and read the real `locationServiceProvider`
-  /// internally; a widget test can inject fakes (a no-network tile
-  /// provider, a directly-inspectable `MapController`, a canned
-  /// [LocationService]) instead.
-  @visibleForTesting
-  final TileProvider? setLocationTileProvider;
-
+  /// both `null`, letting the picker build its own `MapController` and read
+  /// the real `locationServiceProvider` internally; a widget test can inject
+  /// fakes (a directly-inspectable `MapController`, a canned
+  /// [LocationService]) instead. The basemap needs no seam of its own — it
+  /// comes from `basemapStyleProvider`, overridden once per test scope.
   @visibleForTesting
   final MapController? setLocationMapController;
 
@@ -996,7 +992,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final picked = await showSetLocationPicker(
       context,
       initial: initial,
-      tileProvider: widget.setLocationTileProvider,
       controller: widget.setLocationMapController,
       locationService: widget.setLocationLocationService,
     );

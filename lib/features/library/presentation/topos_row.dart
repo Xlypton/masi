@@ -33,7 +33,6 @@ class _ToposList extends StatelessWidget {
     required this.expandedGroupIds,
     required this.onToggleGroup,
     this.bottomInset = 0,
-    this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
@@ -52,7 +51,6 @@ class _ToposList extends StatelessWidget {
   /// ending up hidden behind it (#51). Defaults to 0 so any other caller
   /// (none currently) still gets the old, un-padded behavior.
   final double bottomInset;
-  final TileProvider? setLocationTileProvider;
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
 
@@ -131,7 +129,6 @@ class _ToposList extends StatelessWidget {
             key: ValueKey(('own', entry.wallId)),
             topo: entry.ownTopo!,
             distanceKm: entry.distanceKm,
-            setLocationTileProvider: setLocationTileProvider,
             setLocationMapController: setLocationMapController,
             setLocationLocationService: setLocationLocationService,
           );
@@ -264,7 +261,6 @@ class _TopoRow extends ConsumerStatefulWidget {
     super.key,
     required this.topo,
     this.distanceKm,
-    this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
@@ -277,7 +273,6 @@ class _TopoRow extends ConsumerStatefulWidget {
   /// existing callers that never pass this (every pre-proximity test) are
   /// unaffected either way.
   final double? distanceKm;
-  final TileProvider? setLocationTileProvider;
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
 
@@ -1049,7 +1044,6 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     final picked = await showSetLocationPicker(
       context,
       initial: initial,
-      tileProvider: widget.setLocationTileProvider,
       controller: widget.setLocationMapController,
       locationService: widget.setLocationLocationService,
     );

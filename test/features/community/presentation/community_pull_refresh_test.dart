@@ -1,4 +1,3 @@
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -11,11 +10,11 @@ import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import '../../../support/async_drain.dart';
+import '../../../support/fake_basemap.dart';
 
 /// #57 fix: the Community Feed/Map's manual refresh affordances
 /// (`community-feed-refresh`'s `RefreshIndicator`, `community-map-refresh`'s
@@ -28,25 +27,9 @@ import '../../../support/async_drain.dart';
 /// stated rationale) rather than folded into the already-huge
 /// `community_screen_test.dart`.
 
-/// A minimal-but-real 1x1 transparent PNG (base64), duplicated locally from
-/// `community_screen_test.dart`'s identically-named constant — used as the
-/// tile every fake tile "loads", so `CommunityMapScreen`'s `TileLayer` never
-/// attempts a real network fetch under `flutter_test`.
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
-
 /// Duplicated locally from `community_screen_test.dart`'s
 /// `_NoopTileProvider`: every tile request resolves synchronously to the
 /// same tiny in-memory image, never performing real network/file I/O.
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 /// A [SyncOrchestrator] test double that skips ALL of the real class's
 /// wiring (`build()`'s `ref.watch(appDatabaseProvider)` /
 /// `ref.listen(authStateProvider, ...)` / `tableUpdates()` subscription) and
@@ -94,6 +77,7 @@ ProviderContainer _makeContainer({
     // window.
     retry: failSharedTopos ? (retryCount, error) => null : null,
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       syncOrchestratorProvider.overrideWith(() => fakeOrchestrator),
@@ -247,7 +231,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -312,7 +296,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);

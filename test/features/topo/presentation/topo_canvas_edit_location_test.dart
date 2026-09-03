@@ -20,7 +20,6 @@
 //    `/community` placeholder route carrying the pushed `tab`/`focus` query
 //    params in its text.
 
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -37,15 +36,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
-
-/// A tiny valid PNG's bytes, used by [_NoopTileProvider] below. Copied from
-/// `topos_screen_test.dart`'s identical fixture (itself copied from
-/// `community_screen_test.dart`) — each of this trio of test files keeps its
-/// own private copy rather than sharing one, matching the existing pattern.
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
+import '../../../support/fake_basemap.dart';
 
 /// A tile provider that never performs any network/file I/O: every tile
 /// request resolves synchronously to the same tiny in-memory image. Copied
@@ -53,13 +44,6 @@ final _tinyPngBytes = base64Decode(
 /// into the "Set location" picker this file opens, so its `FlutterMap`'s
 /// `TileLayer` can never attempt a real network fetch under `flutter_test`
 /// (see CLAUDE.md: "never hit the network in a widget test").
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 /// Creates a real in-memory DB + [ProviderContainer] + a persisted
 /// Area/Sector/Wall, mirroring the harness pattern used throughout this
 /// directory (e.g. `canvas_chrome_gating_test.dart`'s `_seedWall`).
@@ -68,6 +52,7 @@ _seedWall() async {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
     ],
@@ -295,7 +280,6 @@ void main() {
             seeded.container,
             TopoCanvasScreen(
               wallId: seeded.wallId,
-              setLocationTileProvider: _NoopTileProvider(),
               setLocationMapController: controller,
             ),
           ),

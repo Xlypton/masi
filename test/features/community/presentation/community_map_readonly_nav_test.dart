@@ -11,7 +11,6 @@
 // collision with that file. Seed helpers are duplicated (trimmed to just
 // what's needed here) rather than imported, since `community_screen_test.dart`
 // declares them as file-private (`_seedArea`/`_seedSector`/`_seedWall`).
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -20,31 +19,16 @@ import 'package:masi/features/community/presentation/community_map_screen.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import '../../../support/async_drain.dart';
-
-/// A minimal-but-real 1x1 transparent PNG (base64) -- copied from
-/// `community_screen_test.dart`'s identical fixture -- used as the
-/// (already-decoded) in-memory image every fake tile "loads".
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
+import '../../../support/fake_basemap.dart';
 
 /// A tile provider that never performs any network/file I/O -- copied from
 /// `community_screen_test.dart`'s identical private class -- so the Map
 /// tab's `TileLayer` never attempts a real network fetch under
 /// `flutter_test`.
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 Future<void> _seedArea(AppDatabase db, {required String id, required String name}) {
   return db
       .into(db.areas)
@@ -144,6 +128,7 @@ ProviderContainer _makeContainer() {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
     ],
@@ -204,7 +189,7 @@ void main() {
         await tester.runAsync(() => _seedCommunityWall(db));
 
         await tester.pumpWidget(
-          _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+          _wrap(container, CommunityMapScreen()),
         );
         await _drain(tester);
 
@@ -234,7 +219,7 @@ void main() {
         await tester.runAsync(() => _seedOwnWall(db));
 
         await tester.pumpWidget(
-          _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+          _wrap(container, CommunityMapScreen()),
         );
         await _drain(tester);
 

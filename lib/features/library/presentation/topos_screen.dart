@@ -1,6 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
+import 'package:flutter_map/flutter_map.dart' show MapController;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -82,16 +82,14 @@ part 'topos_storage_banner.dart';
 /// the real [showPhotoSourceSheet] / [pickPhotoFrom]) so widget tests can
 /// drive the "New topo" flow without touching the real camera/gallery UI.
 ///
-/// [setLocationTileProvider] / [setLocationMapController] /
-/// [setLocationLocationService] are the same kind of seam for every
-/// `_TopoRow`'s "Set location" action (see `set_location_picker.dart`'s
-/// `showSetLocationPicker`), threaded all the way down to
-/// `_TopoRow._handleSetLocation` — production leaves all three null, letting
-/// the picker build its own resilient tile provider/`MapController` and
-/// read the real `locationServiceProvider`, exactly like `CommunityScreen`'s
-/// identical `tileProvider`/`mapController` seams. A widget test that opens
-/// the picker MUST inject `setLocationTileProvider` (a noop tile provider),
-/// or the map would attempt a real network tile fetch under `flutter_test`.
+/// [setLocationMapController] / [setLocationLocationService] are the same
+/// kind of seam for every `_TopoRow`'s "Set location" action (see
+/// `set_location_picker.dart`'s `showSetLocationPicker`), threaded all the
+/// way down to `_TopoRow._handleSetLocation` — production leaves both null,
+/// letting the picker build its own `MapController` and read the real
+/// `locationServiceProvider`. The basemap itself needs no seam: it comes
+/// from `basemapStyleProvider`, which a test overrides once in its
+/// `ProviderScope` (see `test/support/fake_basemap.dart`).
 ///
 /// A [ConsumerStatefulWidget] (rather than a stateless [ConsumerWidget])
 /// so it can hold the [_creating] re-entrancy flag: without it, a fast
@@ -189,7 +187,6 @@ class ToposScreen extends ConsumerStatefulWidget {
     super.key,
     this.photoSourcePicker = showPhotoSourceSheet,
     this.photoPicker = pickPhotoFrom,
-    this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
@@ -198,7 +195,6 @@ class ToposScreen extends ConsumerStatefulWidget {
   final Future<XFile?> Function(ImageSource) photoPicker;
 
   @visibleForTesting
-  final TileProvider? setLocationTileProvider;
 
   @visibleForTesting
   final MapController? setLocationMapController;
@@ -839,8 +835,6 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                           // can still scroll fully into view instead of ending
                           // up permanently hidden under the button.
                           bottomInset: bottomChromeInset + 64,
-                          setLocationTileProvider:
-                              widget.setLocationTileProvider,
                           setLocationMapController:
                               widget.setLocationMapController,
                           setLocationLocationService:

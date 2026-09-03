@@ -1,4 +1,4 @@
-/// The raster basemap every map surface in the app draws on.
+/// The vector basemap every map surface in the app draws on.
 ///
 /// This lives in one place because the choice is not a style preference — it
 /// is a licensing constraint, and getting it wrong is *visible to the user as
@@ -34,25 +34,30 @@ const String cartoBasemapKey = String.fromEnvironment(
   defaultValue: 'cb1_2tdk_1_f62f62c1d553920476bbdeeb',
 );
 
-/// CARTO Positron ("light_all"), the near-white cartography this app is drawn
-/// against — pale ground, grey labels, no colour of its own to fight the
-/// purple route markers.
+/// CARTO Positron, the near-white cartography this app is drawn against —
+/// pale ground, grey labels, no colour of its own to fight the purple route
+/// markers.
 ///
-/// `{r}` is flutter_map's retina placeholder: CARTO serves a real `@2x` tile,
-/// so on a phone this is genuinely twice the resolution rather than an upscale.
+/// `{key}` is substituted by `StyleReader(apiKey:)`, not by a tile URL
+/// builder: this is a style document, and the key it carries is inherited by
+/// the TileJSON, sprite and glyph URLs the style names.
+///
+/// Vector, not raster, and resolution-independent as a result — there is no
+/// `@2x` variant to ask for, because the tile is geometry and the device
+/// rasterises it at whatever pixel ratio it has.
 ///
 /// Free up to 5 million tile requests a month, which this app will not
 /// approach. The conditions are attribution ([basemapAttribution], visible
 /// without interaction) and not reusing the key for unrelated projects.
 ///
-/// **Known expiry: CARTO is retiring raster.** Their docs say the raster
-/// basemaps are "being retired" and that they are considering stopping data
-/// updates to them, with vector as the recommended path. No date is given. The
-/// vector migration is a real piece of work rather than a URL swap — on web the
-/// vector renderers have no persistent tile cache, and this app's offline map
-/// (`MasiTileCachingProvider`) is raster-only — so it is a deliberate project,
-/// not something to be surprised by. When it happens, this constant is again
-/// the only line that has to change.
+/// This is a VECTOR style, not a raster URL template — CARTO's docs say the
+/// raster basemaps are "being retired", and vector is both the recommended
+/// path and the far smaller one on disk (see [kVectorTileCacheMaxBytes]). The
+/// migration was a real piece of work rather than a URL swap, because the
+/// vector renderer has no persistent tile cache on web and this app has to
+/// draw at a crag with no signal; `vector_tile_cache.dart` is that cache.
+/// When the style itself changes, this constant is again the only line that
+/// has to move.
 const String basemapStyleUri =
     'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json?key={key}';
 

@@ -38,9 +38,8 @@ abstract class GeocodingService {
 /// `https://nominatim.openstreetmap.org/search?q=<query>&format=json&limit=5&addressdetails=0`.
 ///
 /// [client] is a test-injectable seam that defaults to a PLAIN
-/// `http.Client()` -- deliberately NOT `community_screen.dart`'s
-/// `buildResilientTileHttpClient()`, which wraps a `RetryClient` that
-/// automatically retries 429/5xx responses with backoff. That policy fits
+/// `http.Client()` -- deliberately NOT a `RetryClient`, which would
+/// automatically retry 429/5xx responses with backoff. That policy fits
 /// map tiles (many small, cheap, parallel requests against a CDN) but is
 /// wrong here: Nominatim's usage policy caps callers at ~1 request/second
 /// and a 429 means "you're already over that limit" -- auto-retrying it
@@ -57,9 +56,9 @@ class NominatimGeocodingService implements GeocodingService {
 
   /// Exposes the constructed [_client] so a test can assert on ITS
   /// concrete type (e.g. that it is NOT a `RetryClient`) without touching
-  /// the real network -- the only way to observe the difference between
-  /// this class's default and `buildResilientTileHttpClient()`'s, since
-  /// `_client` itself is private to this library.
+  /// the real network -- the only way to observe that this class's default
+  /// carries no retry policy, since `_client` itself is private to this
+  /// library.
   @visibleForTesting
   http.Client get debugClient => _client;
 

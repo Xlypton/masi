@@ -10,7 +10,7 @@
 /// A SEPARATE IndexedDB database from `climbtopo-photos` on purpose: tiles are
 /// derivable and disposable, photos are not, and keeping them apart means a
 /// wholesale tile-cache drop (the quota-pressure response — see
-/// `MasiTileCachingProvider`) can never touch a single photo byte.
+/// `CachingVectorTileProvider`) can never touch a single photo byte.
 library;
 
 import 'dart:typed_data';
@@ -33,7 +33,7 @@ class CachedTileRecord {
   final Uint8List bytes;
 
   /// Epoch millis at which this tile should be revalidated. Written by
-  /// `MasiTileCachingProvider`, which deliberately overrides what the tile
+  /// `CachingVectorTileProvider`, which deliberately overrides what the tile
   /// server asked for — see its doc for why.
   final int staleAtMs;
 
@@ -114,10 +114,10 @@ class IdbTileCacheStore implements TileCacheStore {
   /// `idb.idbFactoryWeb` is a getter that `throw`s `UnimplementedError` off
   /// the web (`idb_shim/src/native_web/idb_native_stub.dart`), so reading it
   /// eagerly would make the production wiring un-constructible on the Dart
-  /// VM, and with it every unit test that merely builds
-  /// `webTileCachingProvider()` or `buildResilientTileProvider(isWeb: true)`.
-  /// Deferring it to [_openDb] means those tests construct the real object
-  /// graph and only a genuine I/O attempt would need a browser.
+  /// VM, and with it every unit test that merely builds an
+  /// `IdbTileCacheStore` to hand to a `CachingVectorTileProvider`. Deferring
+  /// it to [_openDb] means those tests construct the real object graph and
+  /// only a genuine I/O attempt would need a browser.
   idb.IdbFactory get _factory => _factoryOverride ?? idb.idbFactoryWeb;
 
   final int Function() _nowMs;

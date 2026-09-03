@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/location/location_service.dart';
-import 'package:masi/core/map/basemap.dart';
-import 'package:masi/core/map/masi_tile_caching_provider.dart';
+import 'package:masi/core/map/basemap_layer.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/community_providers.dart';
@@ -35,61 +33,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' show BaseClient, BaseRequest, StreamedResponse;
 import 'package:latlong2/latlong.dart';
 import '../../../support/async_drain.dart';
-
-/// A minimal-but-real 1x1 transparent PNG (base64) — same known-valid bytes
-/// `topos_screen_test.dart` decodes for its "New topo" flow — used as the
-/// (already-decoded) in-memory image every fake tile "loads". See
-/// [_NoopTileProvider].
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
-
-/// A tile provider that never performs any network/file I/O: every tile
-/// request resolves synchronously to the same tiny in-memory image. Wired
-/// into every [CommunityScreen] built by this test file's [_wrap], so the
-/// Map tab's `TileLayer` can never attempt a real network fetch under
-/// `flutter_test` (see CLAUDE.md: "never hit the network in a widget test").
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
-/// A spy [Client] that resolves every request synchronously to a tiny fake
-/// PNG response — never touching real DNS/sockets — and tracks whether
-/// [close] was called. Used by FX3 (`community_screen_test.dart`'s MAJOR-2
-/// create-once/dispose-closes-client group) to exercise
-/// `_MapViewState`'s REAL `buildResilientTileHttpClient`/
-/// `buildResilientTileProvider` wiring end-to-end, via
-/// `CommunityScreen.tileHttpClientFactory`, without ever performing real
-/// network I/O — which, like the real image-codec decode CLAUDE.md warns
-/// never to drive in a widget test, would never resolve under
-/// `flutter_test`'s FakeAsync zone (a real `Socket.connect` is genuine
-/// OS-level async I/O, not a `Timer` FakeAsync can fast-forward — and a
-/// fast local failure would still arm a real `RetryClient` backoff
-/// `Timer`, which `flutter_test` flags as "a Timer is still pending" at
-/// teardown).
-class _SpyHttpClient extends BaseClient {
-  bool closed = false;
-  int sendCount = 0;
-
-  @override
-  Future<StreamedResponse> send(BaseRequest request) async {
-    sendCount++;
-    return StreamedResponse(Stream.value(_tinyPngBytes), 200);
-  }
-
-  @override
-  void close() {
-    closed = true;
-    super.close();
-  }
-}
+import '../../../support/fake_basemap.dart';
 
 /// A [LocationService] double that resolves to whatever fixed [result] it
 /// was constructed with — no real geolocator/platform-channel call ever
@@ -134,6 +80,7 @@ ProviderContainer _makeContainer({
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       if (locationService != null)
@@ -807,7 +754,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1696,7 +1643,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1766,7 +1713,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -1798,6 +1745,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           authStateProvider.overrideWith(
@@ -1837,7 +1785,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -1881,7 +1829,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1914,7 +1862,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1976,7 +1924,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2018,7 +1966,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2050,7 +1998,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2416,7 +2364,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2440,11 +2388,11 @@ void main() {
   });
 
   group('Subtask A: map polish — nicer tiles, attribution, logo markers', () {
-    testWidgets('Map tab uses the keyed CARTO tile URL, keeps the '
-        'injectable tileProvider seam, and shows the OSM/CARTO credit TEXT '
-        'visibly at a realistic viewport WITHOUT any tap (regression: a '
-        'collapsed RichAttributionWidget info-icon popup does not satisfy '
-        'the "attribution must be visible without interaction" requirement)', (
+    testWidgets('Map tab mounts the shared BasemapLayer and shows the '
+        'OSM/CARTO credit TEXT visibly at a realistic viewport WITHOUT any '
+        'tap (regression: a collapsed RichAttributionWidget info-icon popup '
+        'does not satisfy the "attribution must be visible without '
+        'interaction" requirement)', (
       tester,
     ) async {
       // A realistic ≥360px-wide logical viewport (rather than
@@ -2460,7 +2408,7 @@ void main() {
       await tester.runAsync(() => _seedStandardScenario(db));
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2468,16 +2416,14 @@ void main() {
 
       expect(tester.takeException(), isNull);
 
-      final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
-      expect(tileLayer.urlTemplate, basemapUrlTemplate);
-      // A key in the URL is the only thing that separates a served tile from
-      // a watermarked one: CARTO answers 200 with a valid PNG either way,
-      // which is exactly why nothing else here caught it going key-only.
-      // `basemap_test.dart` owns that check in full.
-      expect(tileLayer.urlTemplate, contains('key='));
-      // Still the injected fake, never a real NetworkTileProvider — this
-      // test must perform no real network I/O.
-      expect(tileLayer.tileProvider, isA<_NoopTileProvider>());
+      // The ground itself comes from the ONE shared widget, so which server
+      // it draws and on what terms is `basemap_test.dart`'s question, asked
+      // once, rather than re-asked per screen. What this screen owes is that
+      // it mounts that widget at all.
+      expect(find.byType(BasemapLayer), findsOneWidget);
+      // And never a raster layer: a `TileLayer` reappearing here would mean
+      // the retired CARTO raster endpoint came back with it.
+      expect(find.byType(TileLayer), findsNothing);
 
       // The credit text must be rendered and visible WITHOUT any tap —
       // not merely present (opacity 0) somewhere in the tree, which is
@@ -2520,7 +2466,7 @@ void main() {
       await tester.runAsync(() => _seedStandardScenario(db));
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2545,7 +2491,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2574,6 +2520,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           authStateProvider.overrideWith(
@@ -2637,7 +2584,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+        _wrap(container, CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2720,7 +2667,7 @@ void main() {
         await tester.pumpWidget(
           _wrapWithDetailRoute(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2753,46 +2700,6 @@ void main() {
       },
     );
 
-    testWidgets(
-      'C1/C2/C3: TileLayer evicts off-screen error tiles (so a transient '
-      'fetch failure is re-requested on zoom/pan instead of staying a '
-      'permanent gray rectangle), fetches real tiles to the deepest zoom the '
-      'basemap really renders, and keeps a slightly larger keep-buffer -- '
-      'while the urlTemplate regression guard from the test above still holds',
-      (tester) async {
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
-
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
-          ),
-        );
-        await _drain(tester);
-
-        await _drain(tester);
-
-        expect(tester.takeException(), isNull);
-
-        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
-        // C1: off-screen error tiles must be evicted so zooming/panning
-        // re-requests them instead of leaving a permanent gray hole.
-        expect(
-          tileLayer.evictErrorTileStrategy,
-          EvictErrorTileStrategy.notVisibleRespectMargin,
-        );
-        // C2: capped at the basemap's deepest real zoom, so flutter_map
-        // upscales the last real tile rather than requesting 404s.
-        expect(tileLayer.maxNativeZoom, basemapMaxNativeZoom);
-        expect(tileLayer.maxNativeZoom, 20);
-        // C3 regression guard: urlTemplate is unchanged, and keepBuffer is
-        // bumped from the default of 2 to 3.
-        expect(tileLayer.urlTemplate, basemapUrlTemplate);
-        expect(tileLayer.keepBuffer, 3);
-      },
-    );
   });
 
   group('layout overflow regression: populated _FeedRow at phone width '
@@ -3049,6 +2956,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           authStateProvider.overrideWith(
@@ -3152,7 +3060,6 @@ void main() {
         _wrap(
           container,
           CommunityMapScreen(
-            tileProvider: _NoopTileProvider(),
             focusWallId: 'wall-focus',
           ),
         ),
@@ -3198,7 +3105,6 @@ void main() {
           _wrap(
             container,
             CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
               focusWallId: 'does-not-exist',
             ),
           ),
@@ -3222,7 +3128,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3256,6 +3162,7 @@ void main() {
         addTearDown(db.close);
         final container = ProviderContainer(
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             sharedToposProvider.overrideWith(
@@ -3339,7 +3246,6 @@ void main() {
           _wrap(
             container,
             CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
               mapController: controller,
             ),
           ),
@@ -3369,7 +3275,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3405,7 +3311,6 @@ void main() {
         _wrap(
           container,
           CommunityMapScreen(
-            tileProvider: _NoopTileProvider(),
             mapController: controller,
           ),
         ),
@@ -3448,7 +3353,6 @@ void main() {
           _wrap(
             container,
             CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
               mapController: controller,
             ),
           ),
@@ -3506,7 +3410,6 @@ void main() {
           _wrap(
             container,
             CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
               mapController: controller,
             ),
           ),
@@ -3521,188 +3424,6 @@ void main() {
       },
     );
   });
-
-  group('MC2: resilient tile provider factory', () {
-    test('buildResilientTileProvider() returns a non-null NetworkTileProvider '
-        'without throwing (the retry behavior itself -- 429/5xx/connection- '
-        'error retries with backoff -- is on-device-only and not exercised '
-        'here)', () {
-      final provider = buildResilientTileProvider();
-      expect(provider, isA<NetworkTileProvider>());
-    });
-
-    test(
-      'buildResilientTileHttpClient(inner: ...) wraps the GIVEN client '
-      'rather than allocating its own real http.Client() -- the seam '
-      'FX3 below relies on to exercise the retry-policy wiring with a spy',
-      () {
-        final spy = _SpyHttpClient();
-        final client = buildResilientTileHttpClient(inner: spy);
-        expect(client, isNotNull);
-        // Closing the returned (RetryClient-wrapped) client must close the
-        // exact spy passed in -- RetryClient.close() delegates to its inner
-        // client -- proving `inner` is genuinely wired through rather than
-        // ignored in favor of a fresh internal Client().
-        client.close();
-        expect(spy.closed, isTrue);
-      },
-    );
-
-    test('buildResilientTileProvider(isWeb: true) now gets the REAL IndexedDB '
-        'tile cache instead of the no-op (web offline Stage 3, task 6) -- the '
-        'Map tab was blank offline because flutter_map\'s built-in cache is '
-        'documented as a noop on web, so this call site used to make that '
-        'no-op explicit rather than fill the hole', () {
-      final provider = buildResilientTileProvider(isWeb: true);
-      expect(provider.cachingProvider, isA<MasiTileCachingProvider>());
-      expect(provider.cachingProvider!.isSupported, isTrue);
-    });
-
-    test('buildResilientTileProvider(isWeb: false) leaves cachingProvider null '
-        '-- native keeps flutter_map\'s default on-disk cache, unchanged', () {
-      final provider = buildResilientTileProvider(isWeb: false);
-      expect(
-        provider.cachingProvider,
-        isNull,
-        reason:
-            'null is what selects BuiltInMapCachingProvider; passing '
-            'our IndexedDB cache on native would REPLACE a working 1 GB '
-            'on-disk cache with a worse one',
-      );
-    });
-
-    test('both TileLayers share ONE cache instance, so the Community map and '
-        'the Set-location picker share one budget and one LRU ordering rather '
-        'than running competing caches over the same database', () {
-      final a = buildResilientTileProvider(isWeb: true);
-      final b = buildResilientTileProvider(isWeb: true);
-      expect(identical(a.cachingProvider, b.cachingProvider), isTrue);
-    });
-
-    test('an explicit cachingProvider always wins over the isWeb default -- '
-        "the test-only DisabledMapCachingProvider _MapViewState._tileProvider "
-        'passes under a spy tileHttpClientFactory must not be clobbered by '
-        'the web branch', () {
-      final provider = buildResilientTileProvider(
-        isWeb: true,
-        cachingProvider: const DisabledMapCachingProvider(),
-      );
-      expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
-    });
-  });
-
-  group(
-    'FX3 (MAJOR 2): resilient tile provider is created ONCE per '
-    '_MapViewState (never per-rebuild) and its client is closed on dispose',
-    () {
-      testWidgets(
-        'with NO injected tileProvider (only a spy tileHttpClientFactory, '
-        'so no real network I/O ever happens), TileLayer.tileProvider stays '
-        'the SAME instance across a rebuild triggered by a programmatic '
-        'MapController.rotate() (the internal rotation-tracking setState '
-        'described in _MapViewState._rotationDegrees\' doc -- no on-screen '
-        'control can trigger rotation anymore, see MC4) -- proving '
-        'create-once -- and dispose() closes exactly the client '
-        'this widget created',
-        (tester) async {
-          debugResetResilientTileClientCounters();
-          final spyClient = _SpyHttpClient();
-          final controller = MapController();
-          addTearDown(controller.dispose);
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() => _seedStandardScenario(db));
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(
-                mapController: controller,
-                tileHttpClientFactory: () => spyClient,
-              ),
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(debugResilientTileClientCreateCount, 1);
-
-          final firstProvider = tester
-              .widget<TileLayer>(find.byType(TileLayer))
-              .tileProvider;
-          expect(firstProvider, isA<NetworkTileProvider>());
-
-          // Trigger a rebuild via the internal rotation-tracking setState
-          // (see _MapViewState._rotationDegrees' doc -- the on-screen
-          // compass control that used to drive this was removed once
-          // rotation was disabled, but the setState path itself is kept
-          // for exactly this regression test) -- the exact path MAJOR 2's
-          // bug report identifies as the source of the per-rebuild client
-          // leak.
-          controller.rotate(30);
-          await tester.pump();
-
-          expect(tester.takeException(), isNull);
-          final secondProvider = tester
-              .widget<TileLayer>(find.byType(TileLayer))
-              .tileProvider;
-          expect(
-            identical(firstProvider, secondProvider),
-            isTrue,
-            reason:
-                'the SAME NetworkTileProvider instance must be reused '
-                'across rebuilds, not reallocated',
-          );
-          expect(
-            debugResilientTileClientCreateCount,
-            1,
-            reason: 'a second rebuild must not create a second client',
-          );
-          expect(spyClient.closed, isFalse);
-
-          // Tear this widget down (replace the whole tree) so
-          // `_MapViewState.dispose()` runs, then confirm it closed exactly
-          // the client this widget itself created.
-          await tester.pumpWidget(const SizedBox());
-          await tester.pump();
-
-          expect(tester.takeException(), isNull);
-          expect(spyClient.closed, isTrue);
-          expect(debugResilientTileClientCloseCount, 1);
-        },
-      );
-
-      testWidgets(
-        'an injected tileProvider (e.g. _NoopTileProvider, as every other '
-        'test in this file uses) bypasses this entirely -- no resilient '
-        'client is ever created, so dispose() has nothing of its own to '
-        'close',
-        (tester) async {
-          debugResetResilientTileClientCounters();
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() => _seedStandardScenario(db));
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(debugResilientTileClientCreateCount, 0);
-
-          await tester.pumpWidget(const SizedBox());
-          await tester.pump();
-
-          expect(tester.takeException(), isNull);
-          expect(debugResilientTileClientCloseCount, 0);
-        },
-      );
-    },
-  );
 
   group('MC3: find-me map control', () {
     testWidgets(
@@ -3724,7 +3445,6 @@ void main() {
           _wrap(
             container,
             CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
               mapController: controller,
             ),
           ),
@@ -3767,7 +3487,6 @@ void main() {
         _wrap(
           container,
           CommunityMapScreen(
-            tileProvider: _NoopTileProvider(),
             mapController: controller,
           ),
         ),
@@ -3797,7 +3516,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -3824,7 +3543,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3862,25 +3581,17 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
 
-          final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
-          expect(tileLayer.urlTemplate, basemapUrlTemplate);
-          // A key in the URL is the only thing that distinguishes a served
-          // tile from a watermarked one — CARTO answers 200 with a valid PNG
-          // either way. `basemap_test.dart` owns that check in full.
-          expect(tileLayer.urlTemplate, contains('key='));
-          expect(
-            tileLayer.evictErrorTileStrategy,
-            EvictErrorTileStrategy.notVisibleRespectMargin,
-          );
-          expect(tileLayer.maxNativeZoom, basemapMaxNativeZoom);
-          expect(tileLayer.keepBuffer, 3);
+          // The basemap is one shared widget now; which server it draws and
+          // on what terms is `basemap_test.dart`'s question.
+          expect(find.byType(BasemapLayer), findsOneWidget);
+          expect(find.byType(TileLayer), findsNothing);
 
           expect(
             find.byKey(const Key('community-map-attribution')),
@@ -3926,6 +3637,7 @@ void main() {
           // what this test is actually exercising.
           retry: (retryCount, error) => null,
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             sharedToposProvider.overrideWith(
@@ -3939,7 +3651,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3977,6 +3689,7 @@ void main() {
           // what this test is actually exercising.
           retry: (retryCount, error) => null,
           overrides: [
+      ...fakeBasemapOverrides(),
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             sharedToposProvider.overrideWith(

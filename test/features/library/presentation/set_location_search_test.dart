@@ -9,7 +9,6 @@
 // that plumbing.
 
 import 'dart:async' show Completer, unawaited;
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/location/geocoding_service.dart';
@@ -22,24 +21,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-/// A tiny valid PNG's bytes (copied from `topos_screen_test.dart`'s
-/// identical fixture) — used by [_NoopTileProvider] below.
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
+import '../../../support/fake_basemap.dart';
 
 /// A tile provider that never performs any network/file I/O: every tile
 /// request resolves synchronously to the same tiny in-memory image (copied
 /// from `topos_screen_test.dart`'s identical private class).
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 /// A [GeocodingService] double that, by default, resolves every query to
 /// whatever fixed [results] list it was constructed with — no real network/
 /// Nominatim call ever happens under `flutter_test`. Tracks [callCount]/
@@ -143,6 +129,7 @@ Future<BuildContext> _pumpHarness(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+      ...fakeBasemapOverrides(),
         connectivityServiceProvider.overrideWithValue(
           connectivity ?? _FakeConnectivityService(true),
         ),
@@ -190,7 +177,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -242,7 +228,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -282,7 +267,6 @@ void main() {
         final context = await _pumpHarness(tester, connectivity: connectivity);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -326,7 +310,6 @@ void main() {
         final context = await _pumpHarness(tester, connectivity: connectivity);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -378,7 +361,6 @@ void main() {
         final context = await _pumpHarness(tester, connectivity: connectivity);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -416,7 +398,6 @@ void main() {
       final context = await _pumpHarness(tester);
       final pickerFuture = showSetLocationPicker(
         context,
-        tileProvider: _NoopTileProvider(),
         controller: controller,
         geocodingService: geocoding,
       );
@@ -460,7 +441,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -530,7 +510,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -582,7 +561,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -690,6 +668,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+      ...fakeBasemapOverrides(),
               connectivityServiceProvider.overrideWithValue(
                 _FakeConnectivityService(true),
               ),
@@ -718,7 +697,6 @@ void main() {
 
         final pickerFuture = showSetLocationPicker(
           capturedContext,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -787,7 +765,6 @@ void main() {
         final context = await _pumpHarness(tester);
         final pickerFuture = showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         );
@@ -822,7 +799,6 @@ void main() {
       unawaited(
         showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           geocodingService: geocoding,
         ),
@@ -882,7 +858,6 @@ void main() {
       unawaited(
         showSetLocationPicker(
           context,
-          tileProvider: _NoopTileProvider(),
           controller: controller,
           locationService: location,
         ),

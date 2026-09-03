@@ -17,7 +17,6 @@
 //   debounce-driving `tester.pump(const Duration(milliseconds: 400))`
 //   pattern.
 import 'dart:async' show Completer;
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -34,26 +33,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import '../../../support/async_drain.dart';
-
-/// A minimal-but-real 1x1 transparent PNG (base64) — copied from
-/// `community_screen_test.dart`'s identical fixture — used as the
-/// (already-decoded) in-memory image every fake tile "loads".
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
+import '../../../support/fake_basemap.dart';
 
 /// A tile provider that never performs any network/file I/O — copied from
 /// `community_screen_test.dart`'s identical private class — so the Map
 /// tab's `TileLayer` never attempts a real network fetch under
 /// `flutter_test`.
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    return MemoryImage(_tinyPngBytes);
-  }
-}
-
 /// A [GeocodingService] double that resolves every query to whatever fixed
 /// [results] list it was constructed with, ignoring the query text —
 /// mirrors `set_location_search_test.dart`'s `_FakeGeocodingService`
@@ -125,6 +110,7 @@ ProviderContainer _makeContainer({
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
+      ...fakeBasemapOverrides(),
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       geocodingServiceProvider.overrideWithValue(geocoding),
@@ -220,7 +206,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           container,
-          CommunityMapScreen(tileProvider: _NoopTileProvider()),
+          CommunityMapScreen(),
         ),
       );
       await _drain(tester);
@@ -272,7 +258,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -353,7 +339,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -410,7 +396,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -462,7 +448,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -505,7 +491,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -558,7 +544,6 @@ void main() {
             _wrap(
               container,
               CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
                 mapController: controller,
               ),
             ),
@@ -647,7 +632,6 @@ void main() {
             _wrap(
               container,
               CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
                 mapController: controller,
               ),
             ),
@@ -705,7 +689,6 @@ void main() {
             _wrap(
               container,
               CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
                 mapController: controller,
               ),
             ),
@@ -760,7 +743,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -809,7 +792,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await _drain(tester);

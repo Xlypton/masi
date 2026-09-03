@@ -258,17 +258,31 @@ none of it shows up in a `grep -i dart:io`. Read this before touching sync, the 
   above the list** on both the Library and Community Feed screens — not gated on the list being empty. That
   used to be the bug: the user WITH topos, offline at a crag, saw a list quietly fail to refresh with zero
   signal and no way to tell "stale cache" from "your work is gone."
-- **Map tile cache** (`lib/core/map/masi_tile_caching_provider.dart`) — flutter_map's on-disk
-  `BuiltInMapCachingProvider` is a documented no-op on web (`DisabledMapCachingProvider`), so the Map tab used
-  to render blank tiles offline. `MasiTileCachingProvider` replaces it there only: `kTileCacheMaxBytes` (40 MB,
-  `:30`), `kTileFreshnessWindow` (30 days, `:39`, overriding the tile server's own `Cache-Control` so a stale
-  tile still renders offline instead of getting evicted), LRU eviction, and a quota-shaped write failure clears
-  the store once and disables it for the rest of the session (tiles are redownloadable, so they hand back space
-  to photos rather than compete for it). Lives in a **separate IndexedDB database** from photos —
-  `masi-map-tiles` (`tile_cache_store.dart:77`) vs `climbtopo-photos` (`photo_byte_store.dart:44`) — so tiles
-  can never starve photo bytes. Native is bit-identical: only the `true` branch of the `isWeb` ternary in
-  `buildResilientTileProvider` (`community_map_screen.dart:103-114`, called from `community_map_screen.dart:652`
-  and `set_location_picker.dart:421`) changed.
+- **The basemap is VECTOR** (`flutter_map_vector_tiles`, CARTO Positron), and there is **no `TileLayer`
+  anywhere in `lib`** — a raster one reappearing is the regression `basemap_test.dart` and
+  `community_screen_test.dart` both watch for. One widget, `BasemapLayer` (`lib/core/map/basemap_layer.dart`),
+  is what both map surfaces drop into `FlutterMap.children`; `basemapStyleProvider`
+  (`lib/core/map/basemap_style.dart`) loads the style once per app run (NOT autoDispose — disposing a `Style`
+  disposes the tile providers a live layer is using).
+  - **Its placeholder is `SizedBox.expand()`, and that is load-bearing.** `FlutterMap` sizes itself from its
+    children under loose constraints, which is what both call sites give it, so a `shrink()` placeholder
+    collapses the whole map to 0x0 while the style is in flight — permanently, offline with nothing cached.
+    `test/core/map/basemap_layer_test.dart` pins it.
+  - **Web cache** (`lib/core/map/vector_tile_cache.dart`) — the package has no persistent tile cache on web,
+    so `CachingVectorTileProvider` (the `.mvt` tiles) and `CachingStyleClient` (style, TileJSON, sprites,
+    glyphs — no glyphs means no labels) both write through one `TileCacheStore`. Budget
+    `kVectorTileCacheMaxBytes` = **4 MB, down from the raster cache's 40**: a vector source tops out at z14 and
+    overzooms, so one ~8 KB tile serves every zoom a climber uses, where raster needed ~341 PNGs (~2.7 MB) for
+    the same ground. Stale bytes are **served, not evicted**, when the network fails — flutter_map's own
+    contract threw them away and drew blank. A quota-shaped write failure clears the store once and disables
+    caching for the session (tiles are redownloadable; they hand space back to photos).
+  - **The old raster bytes need no migration**: the vector cache reuses the same IndexedDB store, so the
+    leftover PNGs are its LRU tail and the first vector write under the smaller budget evicts them.
+  - Still a **separate IndexedDB database** from photos — `masi-map-tiles` (`tile_cache_store.dart`) vs
+    `climbtopo-photos` (`photo_byte_store.dart`) — so tiles can never starve photo bytes.
+  - **Widget tests**: there is no `tileProvider` constructor seam any more. A test that mounts a map screen
+    spreads `fakeBasemapOverrides()` (`test/support/fake_basemap.dart`) into its `ProviderScope`/
+    `ProviderContainer` overrides — one override instead of a parameter threaded through four widgets.
 - **`PublicPhotoPruner`** (`lib/features/topo/data/public_photo_pruner.dart`) — pure, import-free eviction
   *policy* for cached PUBLIC photo bytes. Keep-by-default: an unknown owner, an unknown signed-in identity
   (`ownUid == null`), or any ambiguous input all resolve to "keep." Evicts **only** rows it can positively

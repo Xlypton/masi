@@ -5,7 +5,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart'
     show Geolocator, LocationPermission, LocationSettings, Position;
-import 'package:http/http.dart' show Client;
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
@@ -18,8 +17,6 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../backup/application/reachability_providers.dart';
-import '../../community/presentation/community_screen.dart'
-    show buildResilientTileHttpClient, buildResilientTileProvider;
 
 /// Pushes a full-screen "Set location" map picker and resolves to the
 /// [LatLng] the user chose via the Save action, or `null` if they cancelled
@@ -42,9 +39,9 @@ import '../../community/presentation/community_screen.dart'
 /// the "use my location" button remains the explicit way in when that
 /// permission hasn't been granted yet.
 ///
-/// [tileProvider]/[controller]/[locationService]/[geocodingService] are
-/// test-injectable seams mirroring `community_screen.dart`'s `_MapView`
-/// (`tileProvider`/`controller`) and its "find me" button
+/// [controller]/[locationService]/[geocodingService] are
+/// test-injectable seams mirroring `community_map_screen.dart`'s `_MapView`
+/// (`controller`) and its "find me" button
 /// (`locationService`, via `_onFindMePressed`'s
 /// `ref.read(locationServiceProvider)`) — production (every real call site)
 /// leaves them all null. [geocodingService] backs the place-search field
@@ -52,7 +49,6 @@ import '../../community/presentation/community_screen.dart'
 Future<LatLng?> showSetLocationPicker(
   BuildContext context, {
   LatLng? initial,
-  TileProvider? tileProvider,
   MapController? controller,
   LocationService? locationService,
   GeocodingService? geocodingService,
@@ -62,7 +58,6 @@ Future<LatLng?> showSetLocationPicker(
       fullscreenDialog: true,
       builder: (context) => _SetLocationPicker(
         initial: initial,
-        tileProvider: tileProvider,
         controller: controller,
         locationService: locationService,
         geocodingService: geocodingService,
@@ -79,14 +74,12 @@ Future<LatLng?> showSetLocationPicker(
 class _SetLocationPicker extends ConsumerStatefulWidget {
   const _SetLocationPicker({
     this.initial,
-    this.tileProvider,
     this.controller,
     this.locationService,
     this.geocodingService,
   });
 
   final LatLng? initial;
-  final TileProvider? tileProvider;
   final MapController? controller;
   final LocationService? locationService;
   final GeocodingService? geocodingService;
@@ -124,15 +117,6 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   /// followed by an un-panned tap on Save, used to persist a location the
   /// user never actually chose.
   bool _locationChosen = false;
-
-  /// The resilient tile HTTP client THIS state created (see [_tileProvider]),
-  /// held so [dispose] can close exactly it — never an injected
-  /// `widget.tileProvider` (e.g. a test's noop provider), which this widget
-  /// never owns and must never touch. Mirrors `community_screen.dart`'s
-  /// `_MapViewState` create-once/dispose-closes-client fix, avoiding the
-  /// same "a new `http.Client` leaked on every rebuild" bug.
-  Client? _tileHttpClient;
-  NetworkTileProvider? _resilientTileProvider;
 
   /// Backing state for the place-search field (see `build()`'s search
   /// `Positioned`): [_searchController] holds the typed query,
@@ -269,10 +253,6 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     _searchFocusNode.dispose();
     if (_ownsController) {
       _mapController.dispose();
-    }
-    final tileHttpClient = _tileHttpClient;
-    if (tileHttpClient != null) {
-      tileHttpClient.close();
     }
     super.dispose();
   }
@@ -422,22 +402,6 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
       _searching = false;
     });
     _searchFocusNode.unfocus();
-  }
-
-  /// This picker's [TileLayer.tileProvider]: [widget.tileProvider] when
-  /// injected (every widget test), else a resilient [NetworkTileProvider]
-  /// built ONCE for this state's entire lifetime and reused on every
-  /// subsequent `build()` — see [_tileHttpClient]'s doc.
-  TileProvider _tileProvider() {
-    final injected = widget.tileProvider;
-    if (injected != null) return injected;
-    final existing = _resilientTileProvider;
-    if (existing != null) return existing;
-    final client = buildResilientTileHttpClient();
-    _tileHttpClient = client;
-    final provider = buildResilientTileProvider(httpClient: client);
-    _resilientTileProvider = provider;
-    return provider;
   }
 
   /// `set-location-my-location`'s handler: fetches one fresh device fix and

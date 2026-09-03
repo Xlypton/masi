@@ -1,19 +1,15 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' show Client, ClientException;
-import 'package:http/retry.dart' show RetryClient;
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
 import '../../../core/map/basemap.dart';
 import '../../../core/map/basemap_layer.dart';
-import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -26,122 +22,11 @@ import '../../account/application/auth_providers.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../library/application/library_providers.dart';
-import '../../../core/net/retryable_error.dart';
 import '../application/community_providers.dart';
 import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
 import '../data/map_search.dart';
 import '../domain/topo_group.dart';
-
-/// Builds the `RetryClient`-wrapped [http.Client] used by
-/// [buildResilientTileProvider] — split out into its own top-level function
-/// so the RAW client (needed to `.close()` it later — see MAJOR 2 in
-/// `_MapViewState`'s fix history) is reachable independently of the
-/// [NetworkTileProvider] wrapper built around it.
-///
-/// [NetworkTileProvider]'s own default HTTP client only retries a bare `503`
-/// response — never `429` (exactly what a tile server returns once a device's
-/// tile requests get throttled) nor a transient connection error/timeout. A tile
-/// that fails once under the default client is never retried, so it renders
-/// as flutter_map's flat gray error-tile placeholder forever, even long
-/// after the throttling/network blip has cleared. Retrying 429/5xx and
-/// `SocketException`/`ClientException` with a short exponential backoff
-/// lets those same tiles succeed on a later attempt instead.
-///
-/// [inner] overrides the actual transport wrapped by the retry policy
-/// (production leaves it null, getting a real [Client]) — used by
-/// `_MapViewState._tileProvider` to accept a test-injected
-/// `tileHttpClientFactory` (see `community_screen_test.dart`'s FX3), so a
-/// test can exercise this exact retry-policy wiring with a fake, non-network
-/// transport instead of a real socket.
-Client buildResilientTileHttpClient({Client? inner}) {
-  return RetryClient(
-    inner ?? Client(),
-    retries: 4,
-    when: (response) =>
-        response.statusCode == 429 || response.statusCode >= 500,
-    whenError: (error, stackTrace) =>
-        isSocketException(error) || error is ClientException,
-    delay: (retryCount) => Duration(milliseconds: 200 * (1 << retryCount)),
-  );
-}
-
-/// Builds the production [NetworkTileProvider] for the Map tab's [TileLayer],
-/// backed by [buildResilientTileHttpClient]'s retry policy — or, when
-/// [httpClient] is given, that client instead (used by [_MapViewState]'s
-/// create-once tile-provider cache, which needs to hold onto the raw client
-/// to close it later).
-///
-/// [cachingProvider] defaults to null, i.e. flutter_map's own default (the
-/// on-disk [BuiltInMapCachingProvider]) — overridden to
-/// [DisabledMapCachingProvider] by `_MapViewState._tileProvider` when a
-/// test's `tileHttpClientFactory` is in play, so that test never performs
-/// real platform-channel/file I/O for a cache directory `flutter_test`
-/// never provides, AND unconditionally on web (see below). Production
-/// native, which never sets `tileHttpClientFactory`, is completely
-/// unaffected and keeps the real on-disk cache.
-///
-/// Web gets [MasiTileCachingProvider] — a real IndexedDB tile cache under a
-/// hard byte budget with LRU eviction. It exists because
-/// [BuiltInMapCachingProvider] is a documented NO-OP on web (flutter_map's
-/// conditional-import split picks an implementation that simply mixes in
-/// [DisabledMapCachingProvider] whenever `dart.library.io` is unavailable),
-/// so the web build had no tile cache whatsoever and the Map tab rendered
-/// blank the moment the network went away. This call site used to pass
-/// [DisabledMapCachingProvider] to make that no-op explicit; the hole is now
-/// filled instead. Both callers (this file and `set_location_picker.dart`,
-/// via this shared function) get the same process-wide instance, so they
-/// share one budget and one LRU ordering.
-///
-/// Native is deliberately unchanged: `cachingProvider` stays null there,
-/// which selects flutter_map's on-disk [BuiltInMapCachingProvider] (1 GB
-/// default). Substituting our smaller IndexedDB cache on iOS/Android would
-/// replace a working cache with a worse one.
-///
-/// A named top-level function (rather than an inline `NetworkTileProvider()`
-/// call at the `TileLayer` call site) so this policy is unit-testable on its
-/// own — see `community_screen_test.dart`'s MC2 — without needing to pump a
-/// full widget tree or perform real network I/O.
-///
-/// [isWeb] defaults to the real compile-time [kIsWeb] and only exists so a
-/// unit test can exercise the web branch above without a real browser test
-/// runner — mirrors `photo_source_sheet.dart`'s `showCameraOption` seam.
-NetworkTileProvider buildResilientTileProvider({
-  Client? httpClient,
-  MapCachingProvider? cachingProvider,
-  bool? isWeb,
-}) {
-  return NetworkTileProvider(
-    httpClient: httpClient ?? buildResilientTileHttpClient(),
-    cachingProvider:
-        cachingProvider ??
-        ((isWeb ?? kIsWeb) ? webTileCachingProvider() : null),
-  );
-}
-
-/// Test-only instrumentation for MAJOR 2's create-once/dispose-closes-client
-/// fix (see `_MapViewState`'s `_tileProvider`/`dispose`): incremented exactly
-/// once per resilient tile HTTP client a `_MapViewState` itself creates
-/// (never when a test injects its own `tileProvider`, e.g. `_NoopTileProvider`
-/// — that path never touches these counters at all) and once per such client
-/// a `dispose()` call actually closes. A secondary, always-safe confirmation
-/// alongside `community_screen_test.dart`'s FX3, which primarily exercises
-/// the real create-once/dispose-closes code path directly via a spy
-/// `tileHttpClientFactory` (never real network I/O).
-@visibleForTesting
-int debugResilientTileClientCreateCount = 0;
-
-@visibleForTesting
-int debugResilientTileClientCloseCount = 0;
-
-/// Resets [debugResilientTileClientCreateCount]/
-/// [debugResilientTileClientCloseCount] to 0 — call from a test's setup so
-/// counts from an earlier test in the same run never leak in.
-@visibleForTesting
-void debugResetResilientTileClientCounters() {
-  debugResilientTileClientCreateCount = 0;
-  debugResilientTileClientCloseCount = 0;
-}
 
 /// The Community Map tab (bottom-nav branch `/map`): an OpenStreetMap
 /// [FlutterMap] with one marker per shared topo that has coordinates
@@ -153,11 +38,6 @@ void debugResetResilientTileClientCounters() {
 /// navigation bar (`nav_shell.dart`) gives Map its own permanent branch,
 /// independent of Feed ([CommunityFeedScreen]).
 ///
-/// [tileProvider] is an injectable seam for the Map's [TileLayer], defaulting
-/// (when `null`) to the real [NetworkTileProvider] backed by OpenStreetMap
-/// tiles. Widget tests MUST override this with an in-memory fake so this
-/// screen never performs real network I/O.
-///
 /// [focusWallId], when given, centers/zooms the map on that wall's
 /// coordinates instead of the combined marker-set center — see [_MapView]'s
 /// `focusWallId` doc. `router.dart`'s `/map` route builder passes this
@@ -167,13 +47,10 @@ void debugResetResilientTileClientCounters() {
 class CommunityMapScreen extends ConsumerStatefulWidget {
   const CommunityMapScreen({
     super.key,
-    this.tileProvider,
     this.focusWallId,
     this.mapController,
-    this.tileHttpClientFactory,
   });
 
-  final TileProvider? tileProvider;
   final String? focusWallId;
 
   /// Test-injectable [MapController] seam, threaded through to [_MapView] —
@@ -181,12 +58,6 @@ class CommunityMapScreen extends ConsumerStatefulWidget {
   /// `/map` route) leaves this null.
   @visibleForTesting
   final MapController? mapController;
-
-  /// Test-injectable factory for the INNER [Client] wrapped by the Map's
-  /// resilient tile provider, threaded through to [_MapView] — see that
-  /// class's `tileHttpClientFactory` doc. Production code leaves this null.
-  @visibleForTesting
-  final Client Function()? tileHttpClientFactory;
 
   @override
   ConsumerState<CommunityMapScreen> createState() => _CommunityMapScreenState();
@@ -243,10 +114,8 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
             const MasiLoadingIndicator.standalone(label: 'Loading topos'),
         data: (context, topos) => _MapView(
           topos: topos,
-          tileProvider: widget.tileProvider,
           focusWallId: widget.focusWallId,
           controller: widget.mapController,
-          tileHttpClientFactory: widget.tileHttpClientFactory,
         ),
       ),
     );
@@ -271,14 +140,11 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
 class _MapView extends ConsumerStatefulWidget {
   const _MapView({
     required this.topos,
-    required this.tileProvider,
     this.focusWallId,
     this.controller,
-    this.tileHttpClientFactory,
   });
 
   final List<SharedTopo> topos;
-  final TileProvider? tileProvider;
 
   /// When non-null AND found among this build's own/community located
   /// topos, overrides the map's initial center to that wall's coordinates
@@ -295,23 +161,11 @@ class _MapView extends ConsumerStatefulWidget {
   /// MC3: a test supplies its own controller and reads `controller.camera`
   /// after driving a tap on `community-map-find-me`; FX2a/FX3 similarly
   /// inject a controller to call `.rotate(...)` directly — no on-screen
-  /// control can trigger rotation anymore, see [_rotationDegrees]'s doc).
+  /// control can trigger rotation anymore — see this class's `build`).
   /// Production code (`CommunityScreen`) leaves this null, and
   /// [_MapViewState] creates, owns, and disposes its own instead.
   @visibleForTesting
   final MapController? controller;
-
-  /// Test-injectable factory for the INNER [Client] wrapped by
-  /// [_MapViewState]'s create-once resilient tile provider (see that
-  /// class's `_tileProvider` doc) — used by `community_screen_test.dart`'s
-  /// FX3 to exercise the real `buildResilientTileHttpClient`/
-  /// `buildResilientTileProvider` wiring, create-once caching, and
-  /// dispose-closes-client behavior end-to-end with a spy [Client] that
-  /// resolves fake responses synchronously, instead of a real socket.
-  /// Deliberately separate from [tileProvider] (which bypasses this whole
-  /// path). Production (`CommunityScreen`) leaves this null.
-  @visibleForTesting
-  final Client Function()? tileHttpClientFactory;
 
   @override
   ConsumerState<_MapView> createState() => _MapViewState();
@@ -320,43 +174,14 @@ class _MapView extends ConsumerStatefulWidget {
 class _MapViewState extends ConsumerState<_MapView> {
   late final MapController _mapController;
   late final bool _ownsController;
-  StreamSubscription<MapEvent>? _mapEventSubscription;
-
-  /// The map's current bearing, mirrored from [MapController.mapEventStream]
-  /// — kept as widget state (rather than read directly off
-  /// `_mapController.camera` inside `build`) because a controller-driven
-  /// rotation does not, on its own, trigger a rebuild of this widget. No
-  /// on-screen control reads this value anymore: the compass button that
-  /// used to display/reset it was removed once accidental two-finger-twist
-  /// rotation was disabled via `InteractionOptions.flags` in [build] (at
-  /// which point production code can no longer rotate the camera at all —
-  /// see [_MapControlButton] and this class's `build`). Retained so
-  /// `community_screen_test.dart`'s FX3 (MAJOR 2) regression test still has
-  /// an already-wired, lightweight way to force a [_MapViewState] rebuild
-  /// (via the test's own `MapController.rotate(...)` call) and prove the
-  /// resilient tile provider survives it unchanged.
-  double _rotationDegrees = 0;
 
   /// One-shot guard for the imperative device-location auto-center in
   /// [build]'s `ref.listen(myLocationProvider, ...)` — see MAJOR 1 in this
   /// class's fix history. Sticks at `true` for the rest of this
   /// [_MapViewState]'s lifetime once the camera has been auto-centered once,
-  /// so a later, unrelated rebuild (e.g. the rotation-tracking `setState`
-  /// described in [_rotationDegrees]'s doc) can never re-fight the user by
-  /// moving the camera back.
+  /// so a later, unrelated rebuild can never re-fight the user by moving the
+  /// camera back.
   bool _didAutoCenter = false;
-
-  /// The resilient tile HTTP client THIS state created (see [_tileProvider]),
-  /// held so [dispose] can close exactly it — never an injected
-  /// `widget.tileProvider` (e.g. every existing test's `_NoopTileProvider`),
-  /// which this widget never owns and must never touch. Stays `null` for
-  /// this whole state's lifetime whenever `widget.tileProvider` is non-null.
-  Client? _tileHttpClient;
-
-  /// The create-once resilient [NetworkTileProvider] built by
-  /// [_tileProvider] the first time it's needed — see that method's doc for
-  /// why this must be cached rather than rebuilt on every `build()` call.
-  NetworkTileProvider? _resilientTileProvider;
 
   /// Backing state for the unified map-search overlay (`community-map-
   /// search-field`) — mirrors `set_location_picker.dart`'s
@@ -444,12 +269,6 @@ class _MapViewState extends ConsumerState<_MapView> {
     super.initState();
     _ownsController = widget.controller == null;
     _mapController = widget.controller ?? MapController();
-    _mapEventSubscription = _mapController.mapEventStream.listen((event) {
-      final rotation = _mapController.camera.rotation;
-      if (rotation != _rotationDegrees) {
-        setState(() => _rotationDegrees = rotation);
-      }
-    });
     // Seeds a fresh reachability verdict at mount, fire-and-forget, so
     // [_runPlaceSearch]'s own `refresh()` call (below) can usually resolve
     // against an already-in-flight or already-known probe rather than
@@ -461,21 +280,11 @@ class _MapViewState extends ConsumerState<_MapView> {
 
   @override
   void dispose() {
-    _mapEventSubscription?.cancel();
     _debounce?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     if (_ownsController) {
       _mapController.dispose();
-    }
-    // Close exactly the client THIS state created (see [_tileProvider]) —
-    // an injected `widget.tileProvider` leaves `_tileHttpClient` null and is
-    // never touched here; its lifecycle belongs to whoever injected it (see
-    // MAJOR 2 in this class's fix history).
-    final tileHttpClient = _tileHttpClient;
-    if (tileHttpClient != null) {
-      tileHttpClient.close();
-      debugResilientTileClientCloseCount++;
     }
     super.dispose();
   }
@@ -620,49 +429,6 @@ class _MapViewState extends ConsumerState<_MapView> {
       _placeSearchInFlight = false;
     });
     _searchFocusNode.unfocus();
-  }
-
-  /// The Map tab's [TileLayer.tileProvider]: [widget.tileProvider] when
-  /// injected (every existing test's `_NoopTileProvider`, bypassing this
-  /// entirely so no client is ever created under `flutter_test`), else a
-  /// resilient [NetworkTileProvider] built ONCE for this [_MapViewState]'s
-  /// entire lifetime and reused on every subsequent `build()` call — see
-  /// MAJOR 2 in this class's fix history: calling `buildResilientTileProvider()`
-  /// directly inline inside `build` allocated a brand-new provider +
-  /// `RetryClient` + `http.Client` on EVERY rebuild (and the rotation-
-  /// tracking `mapEventStream` listener — see [_rotationDegrees]'s doc —
-  /// triggers a `setState` on every rotation frame), leaking one
-  /// never-closed `http.Client` per rebuild — worse,
-  /// passing an explicit `httpClient:` marks it as externally-owned, so even
-  /// flutter_map's own `TileLayer.dispose() -> tileProvider.dispose()` would
-  /// never have closed it anyway (see [NetworkTileProvider]'s
-  /// `_isInternallyCreatedClient` guard). [dispose] above closes the client
-  /// captured here explicitly instead of relying on that.
-  TileProvider _tileProvider() {
-    final injected = widget.tileProvider;
-    if (injected != null) return injected;
-    final existing = _resilientTileProvider;
-    if (existing != null) return existing;
-    final testFactory = widget.tileHttpClientFactory;
-    final client = buildResilientTileHttpClient(inner: testFactory?.call());
-    _tileHttpClient = client;
-    debugResilientTileClientCreateCount++;
-    final provider = buildResilientTileProvider(
-      httpClient: client,
-      // A test-injected `tileHttpClientFactory` (see
-      // `community_screen_test.dart`'s FX3) means we're under test with a
-      // fake, non-network transport -- skip flutter_map's default on-disk
-      // `BuiltInMapCachingProvider` in that case only, since it would
-      // otherwise perform real platform-channel/file I/O for a cache
-      // directory `flutter_test` never provides. Production
-      // (`testFactory == null`) is completely unaffected and keeps the
-      // default on-disk cache.
-      cachingProvider: testFactory != null
-          ? const DisabledMapCachingProvider()
-          : null,
-    );
-    _resilientTileProvider = provider;
-    return provider;
   }
 
   /// `community-map-find-me`'s handler: fetches ONE fresh fix (never the

@@ -6,8 +6,8 @@
 /// tiles fall back to the in-memory cache and the browser's own HTTP cache".
 /// An in-memory cache dies with the tab and the browser HTTP cache is not
 /// something an app can size, inspect or rely on — so at a crag with no signal
-/// the Map tab would draw nothing, which is the exact failure
-/// `MasiTileCachingProvider` was written to fix for raster tiles.
+/// the Map tab would draw nothing, which is the exact failure the raster
+/// cache this replaced was written to fix.
 ///
 /// This is that fix again, one level up. Two seams, because a working offline
 /// map needs two different kinds of bytes:
@@ -33,7 +33,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_map_vector_tiles/flutter_map_vector_tiles.dart';
 import 'package:http/http.dart' as http;
 
@@ -85,9 +85,26 @@ class CachingVectorTileProvider implements VectorTileProvider {
   final int Function() _nowMs;
 
   /// Flipped false and never back once the browser refuses a write for quota,
-  /// mirroring `MasiTileCachingProvider`: a cache that cannot write must not
+  /// carried over from the raster cache: a cache that cannot write must not
   /// spend the rest of the session throwing on every tile.
   bool _enabled = true;
+
+  /// Cache writes, chained rather than fired in parallel.
+  ///
+  /// [load] must never wait on a write — a tile that is already in hand has
+  /// nothing to gain from blocking on IndexedDB — so writes run off to the
+  /// side. Chaining them serialises the read-modify-evict pass each one ends
+  /// with, so two tiles arriving together cannot both measure the store
+  /// before either has grown it and jointly overshoot [maxBytes].
+  ///
+  /// [settled] is the same chain, awaited: the only way a test can observe a
+  /// write that production deliberately does not wait for.
+  Future<void> _writes = Future<void>.value();
+
+  /// Completes once every write issued so far has finished. Test-only — no
+  /// production path waits for the cache.
+  @visibleForTesting
+  Future<void> settled() => _writes;
 
   @override
   int get maximumZoom => inner.maximumZoom;
@@ -133,7 +150,7 @@ class CachingVectorTileProvider implements VectorTileProvider {
 
     switch (response) {
       case TileResponseData(:final bytes):
-        unawaited(_write(key, bytes));
+        _writes = _writes.then((_) => _write(key, bytes));
         return response;
       case TileResponseError():
         // The offline path. Nothing is written: a failure must never
@@ -175,7 +192,7 @@ class CachingVectorTileProvider implements VectorTileProvider {
   ///
   /// Tiles are re-downloadable and photos are not, so handing the space back
   /// is the right response to a full origin — the same policy, and the same
-  /// reasoning, as `MasiTileCachingProvider`.
+  /// reasoning, the raster cache had.
   Future<void> _handleWriteFailure(String key, Object error) async {
     if (classifyPhotoWriteFailure(error) != PhotoWriteFailure.quotaExceeded) {
       debugPrint('masi/vector-tiles: write failed for $key: $error');
@@ -225,6 +242,13 @@ class CachingStyleClient extends http.BaseClient {
 
   bool _enabled = true;
 
+  /// See [CachingVectorTileProvider._writes] — same chain, same reason.
+  Future<void> _writes = Future<void>.value();
+
+  /// Completes once every write issued so far has finished. Test-only.
+  @visibleForTesting
+  Future<void> settled() => _writes;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.method != 'GET') return inner.send(request);
@@ -244,7 +268,7 @@ class CachingStyleClient extends http.BaseClient {
       // Buffered rather than streamed: the body has to be held anyway to be
       // stored, and these are small documents.
       final bytes = await response.stream.toBytes();
-      unawaited(_write(key, bytes));
+      _writes = _writes.then((_) => _write(key, bytes));
       return _responseFrom(bytes, request);
     } catch (error) {
       if (cached != null) return _responseFrom(cached.bytes, request);

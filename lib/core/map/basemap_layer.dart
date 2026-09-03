@@ -44,11 +44,20 @@ class BasemapLayer extends ConsumerWidget {
         diskCacheMaximumSizeInBytes: kVectorTileCacheMaxBytes,
       ),
       // Loading, or a style that could not be read at all (offline on the very
-      // first run, before anything is cached). Nothing is drawn rather than an
+      // first run, before anything is cached). Nothing is DRAWN rather than an
       // error: the markers, the crosshair and the app's own chrome are still
       // useful over an empty ground, and a map that says "failed" where the
       // rock is would be worse than one that is simply blank.
-      _ => const SizedBox.shrink(),
+      //
+      // `expand`, not `shrink`, and that distinction is load-bearing.
+      // `FlutterMap` sizes itself from its children when its own constraints
+      // are loose — which they are in both call sites, each a non-positioned
+      // child of a `Stack`. A zero-sized placeholder therefore collapses the
+      // WHOLE MAP to 0x0 for as long as the style is in flight: no camera, no
+      // gestures, no markers, and a crosshair pointing at nothing. Offline
+      // with no cached style, that is permanent. Filling the constraints
+      // keeps the map a map while the ground is still missing.
+      _ => const SizedBox.expand(),
     };
   }
 }

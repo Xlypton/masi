@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -31,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../support/async_drain.dart';
+import '../../../support/fake_basemap.dart';
 
 /// The Community feature's adoption of the shared loading system
 /// (`MasiAsyncView` / `MasiSkeleton*` / `MasiLoadingIndicator` /
@@ -74,23 +74,8 @@ class _GatedLocationService implements LocationService {
   }
 }
 
-/// A minimal-but-real 1x1 transparent PNG — the same known-valid bytes
-/// `community_screen_test.dart` uses for its fake tiles.
-final _tinyPngBytes = base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
-  '42YAAAAASUVORK5CYII=',
-);
-
 /// A [TileProvider] that never touches the network — the Map tab must never
 /// perform real tile I/O from a widget test (CLAUDE.md).
-class _NoopTileProvider extends TileProvider {
-  @override
-  ImageProvider<Object> getImage(
-    TileCoordinates coordinates,
-    TileLayer options,
-  ) => MemoryImage(_tinyPngBytes);
-}
-
 /// A [LikesRepository] whose ascent toggle is held open by [gate], so a test
 /// can observe the screen WHILE the write is in flight — which is the whole
 /// question for an optimistic update.
@@ -126,6 +111,7 @@ void main() {
     final db = database ?? AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
+      ...fakeBasemapOverrides(),
         appDatabaseProvider.overrideWithValue(db),
         nowMsProvider.overrideWithValue(() => 1000),
         connectivityServiceProvider.overrideWithValue(_ScriptedConnectivity()),
@@ -243,7 +229,7 @@ void main() {
               sharedTopos: Stream.value(const <SharedTopo>[]),
               locationService: location,
             ),
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(),
           ),
         );
         await drainAsync(tester, settle: false);
@@ -294,6 +280,7 @@ void main() {
       addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
+      ...fakeBasemapOverrides(),
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           connectivityServiceProvider.overrideWithValue(_ScriptedConnectivity()),

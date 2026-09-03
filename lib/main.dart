@@ -41,8 +41,8 @@ Future<void> main() {
 /// This also shrinks flutter_map's tile budget, since decoded tiles share this
 /// one cache. Accepted deliberately: a 256x256 tile is 256 KB decoded, so 32
 /// MiB is still ~128 tiles — several screenfuls — and the on-disk/IndexedDB
-/// tile store (`core/map/masi_tile_caching_provider.dart`) is what actually
-/// backs offline map rendering, not this in-memory one.
+/// tile store (`core/map/vector_tile_cache.dart`) is what actually backs
+/// offline map rendering, not this in-memory one.
 const int kImageCacheMaxBytes = 32 * 1024 * 1024;
 
 /// Guards [installGlobalErrorHandlers] so a second call is a no-op.
