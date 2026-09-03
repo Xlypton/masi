@@ -94,11 +94,45 @@
          pull-to-refreshes — the Flutter app owns all scrolling and gestures. */
       overflow: hidden;
       overscroll-behavior: none;
-      /* Canvas drags must not become text selection or long-press callouts. */
+      /* Canvas drags must not become text selection or long-press callouts.
+         SCOPED BY THE RULE BELOW -- read both together, they are one fix. */
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
       -webkit-tap-highlight-color: transparent;
+    }
+
+    /* RE-ENABLE selection inside Flutter's real text inputs.
+       Flutter web does not edit text on the canvas: it positions a real DOM
+       <input>/<textarea> (class `flt-text-editing`) over the painted field,
+       inside <flt-text-editing-host>, which the engine appends to
+       <flutter-view> in the LIGHT DOM -- NOT inside the <flt-glass-pane>
+       shadow root (see the engine's `DomManager` tree). So it inherits
+       everything set on <body>, and the engine's own stylesheet
+       (`applyGlobalCssRulesToSheet`) never resets `user-select` or
+       `-webkit-touch-callout` -- it only touches ::selection colour,
+       caret-color and ::placeholder.
+
+       The consequence of inheriting the rules above was three separate
+       user-visible bugs, all of them "the text field is broken":
+         - `-webkit-touch-callout: none` suppresses the iOS long-press callout,
+           which is the ONLY way to paste on iOS. The guidebook-import sheet
+           ("paste your guidebook text here") was unusable.
+         - `user-select: none` makes WebKit treat the input's text as
+           unselectable, so the iOS space-bar-hold cursor-positioning gesture
+           has no selection to drive, and drag-select/selection handles do
+           nothing.
+         - No selection means no selection toolbar, so Cut/Copy/Paste never
+           appear.
+
+       Scoping the reset to the text-editing host restores all three without
+       giving the canvas back its text-selection and callout behaviour: the
+       host only ever contains the focused field's input element. */
+    flutter-view flt-text-editing-host,
+    flutter-view flt-text-editing-host * {
+      user-select: text;
+      -webkit-user-select: text;
+      -webkit-touch-callout: default;
     }
 
     /* Theme-aware shell background: ThemeMode.system means mobile browser
@@ -517,8 +551,28 @@
     });
 
     // Long-press / right-click context menu must never interrupt canvas
-    // interaction on web.
+    // interaction on web -- EXCEPT over a text field, where that menu is how
+    // the user pastes.
+    //
+    // Flutter web edits text through a real DOM <input>/<textarea> positioned
+    // over the painted field (see the `flt-text-editing-host` CSS rule in
+    // <head> for the full explanation), so a right-click or long-press on a
+    // focused field has that element as its `target`. Blanket-preventing the
+    // event therefore removed the browser's Paste menu from every text input
+    // in the app while only intending to protect the canvas.
+    //
+    // Wrapped: `closest` is missing on some targets (a text node, an
+    // SVG element in older engines), and a throw here would leave the canvas
+    // unprotected for the rest of the session.
     window.addEventListener('contextmenu', function (e) {
+      try {
+        var target = e.target;
+        if (target && typeof target.closest === 'function' && target.closest(
+          'flt-text-editing-host, input, textarea, [contenteditable="true"]'
+        )) {
+          return;
+        }
+      } catch (_) {}
       e.preventDefault();
     });
 
