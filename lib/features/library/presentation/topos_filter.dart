@@ -64,60 +64,73 @@ class _ToposFilterBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            // `ValueListenableBuilder` (not a bare `TextField`) so the
-            // clear ('x') suffix can appear/disappear as the controller's
+            // The clear ('x') suffix appears/disappears as the controller's
             // text goes non-empty/empty, without this whole bar needing to
             // become stateful -- `TextEditingController` is itself a
             // `ValueListenable<TextEditingValue>`.
-            child: ValueListenableBuilder<TextEditingValue>(
-              valueListenable: searchController,
-              builder: (context, value, _) {
-                return TextField(
-                  key: const Key('topos-search-field'),
-                  controller: searchController,
-                  decoration: InputDecoration(
-                    hintText: 'Search topos',
-                    prefixIcon: Padding(
-                      padding: const EdgeInsets.only(left: 12, right: 8),
-                      child: MasiIcon('search', size: 20, color: colors.ink3),
-                    ),
-                    prefixIconConstraints: const BoxConstraints(
-                      minWidth: 0,
-                      minHeight: 0,
-                    ),
-                    suffixIcon: value.text.isEmpty
-                        ? null
-                        : IconButton(
-                            key: const Key('topos-search-clear'),
-                            icon: MasiIcon(
-                              'close',
-                              size: 16,
-                              color: colors.ink3,
-                            ),
-                            tooltip: 'Clear search',
-                            onPressed: searchController.clear,
-                          ),
-                    suffixIconConstraints: const BoxConstraints(
-                      minWidth: 0,
-                      minHeight: 0,
-                    ),
-                    filled: true,
-                    fillColor: colors.surface2,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: colors.separator),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: colors.separator),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: colors.accent, width: 1.5),
-                    ),
-                  ),
-                );
-              },
+            //
+            // THE LISTENER WRAPS ONLY THE SUFFIX, not the `TextField`. It used
+            // to wrap the whole field, which meant every keystroke AND every
+            // caret move rebuilt the `TextField` and its entire
+            // `InputDecoration` -- four `OutlineInputBorder`s, two
+            // `BoxConstraints`, an `MasiIcon` -- to decide whether one icon
+            // should be there. `TextEditingController` notifies on SELECTION
+            // changes too, not just text, so simply dragging the cursor
+            // through an existing query rebuilt it on every frame of the drag.
+            // Scoping the listener down to the thing that actually depends on
+            // the value leaves the field itself built once per parent build.
+            child: TextField(
+              key: const Key('topos-search-field'),
+              controller: searchController,
+              decoration: InputDecoration(
+                hintText: 'Search topos',
+                prefixIcon: Padding(
+                  padding: const EdgeInsets.only(left: 12, right: 8),
+                  child: MasiIcon('search', size: 20, color: colors.ink3),
+                ),
+                prefixIconConstraints: const BoxConstraints(
+                  minWidth: 0,
+                  minHeight: 0,
+                ),
+                suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: searchController,
+                  builder: (context, value, _) {
+                    if (value.text.isEmpty) {
+                      // `suffixIcon` cannot be null from in here (this builder
+                      // must return a Widget), so an empty, zero-size box
+                      // stands in for the absent icon. `suffixIconConstraints`
+                      // below floors at 0x0, so it occupies nothing -- and the
+                      // `topos-search-clear` key is genuinely absent from the
+                      // tree, which is what the existing tests assert on.
+                      return const SizedBox.shrink();
+                    }
+                    return IconButton(
+                      key: const Key('topos-search-clear'),
+                      icon: MasiIcon('close', size: 16, color: colors.ink3),
+                      tooltip: 'Clear search',
+                      onPressed: searchController.clear,
+                    );
+                  },
+                ),
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 0,
+                  minHeight: 0,
+                ),
+                filled: true,
+                fillColor: colors.surface2,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.separator),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.separator),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.accent, width: 1.5),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: MasiSpacing.sm),
