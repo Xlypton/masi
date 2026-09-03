@@ -53,14 +53,8 @@ const String cartoBasemapKey = String.fromEnvironment(
 /// (`MasiTileCachingProvider`) is raster-only — so it is a deliberate project,
 /// not something to be surprised by. When it happens, this constant is again
 /// the only line that has to change.
-String get basemapUrlTemplate =>
-    'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-    '?key=$cartoBasemapKey';
-
-/// The deepest zoom CARTO renders real tiles for. Past this flutter_map
-/// upscales the last real tile rather than requesting one that would come back
-/// `404`.
-const int basemapMaxNativeZoom = 20;
+const String basemapStyleUri =
+    'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json?key={key}';
 
 /// The credit line. Must be visible without interaction — CARTO's terms are
 /// explicit that "CARTO and OpenStreetMap must be credited on every map", and

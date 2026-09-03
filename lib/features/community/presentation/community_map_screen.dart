@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
 import '../../../core/map/basemap.dart';
+import '../../../core/map/basemap_layer.dart';
 import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
@@ -951,29 +952,7 @@ class _MapViewState extends ConsumerState<_MapView> {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: basemapUrlTemplate,
-          userAgentPackageName: 'com.xlypton.masi',
-          tileProvider: _tileProvider(),
-          // CARTO serves a real `@2x` tile for the `{r}` placeholder, so on a
-          // phone this is genuinely twice the resolution rather than an
-          // upscale of the 1x tile.
-          retinaMode: RetinaMode.isHighDensity(context),
-          // Without this, a tile that fails once (a transient throttle or
-          // network blip) is never evicted and therefore never re-requested,
-          // leaving a permanent gray rectangle even as the user zooms/pans
-          // past it. Evicting off-screen error tiles lets them be re-fetched
-          // next time they scroll into view.
-          evictErrorTileStrategy:
-              EvictErrorTileStrategy.notVisibleRespectMargin,
-          // Past the basemap's deepest real zoom flutter_map would keep
-          // requesting tiles that come back 404; capping makes it upscale the
-          // last real one instead.
-          maxNativeZoom: basemapMaxNativeZoom,
-          // Slightly larger than the default (2) ring of off-screen tiles
-          // kept pre-fetched, so panning shows fewer transient gray edges.
-          keepBuffer: 3,
-        ),
+        const BasemapLayer(),
         MarkerLayer(
           markers: [
             // `if (… case final topo)` purely to bind `group.head` to a name:

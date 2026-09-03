@@ -47,6 +47,12 @@ dependencies:
   supabase_flutter: ^2.16.0
   connectivity_plus: ^7.2.0
   flutter_map: ^8.2.2
+  # Vector basemap for flutter_map. Chosen over the better-known
+  # `vector_map_tiles`, which declares no web support because it depends on
+  # `path_provider` — a non-starter for a web-first app. This one renders on
+  # web with CanvasKit/skwasm, and takes an injected `http.Client`, which is
+  # where `VectorTileHttpCache` hooks the browser tile cache in.
+  flutter_map_vector_tiles: ^2.8.1
   latlong2: ^0.9.1
   # Grapheme/rune-safe string slicing (email_initials.dart) — was already a
   # transitive dep via the Flutter SDK, now declared directly since it's

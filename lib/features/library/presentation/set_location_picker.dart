@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/map/basemap.dart';
+import '../../../core/map/basemap_layer.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -617,18 +618,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                     InteractiveFlag.scrollWheelZoom,
               ),
             ),
-            children: [
-              TileLayer(
-                urlTemplate: basemapUrlTemplate,
-                userAgentPackageName: 'com.xlypton.masi',
-                tileProvider: _tileProvider(),
-                retinaMode: RetinaMode.isHighDensity(context),
-                evictErrorTileStrategy:
-                    EvictErrorTileStrategy.notVisibleRespectMargin,
-                maxNativeZoom: basemapMaxNativeZoom,
-                keepBuffer: 3,
-              ),
-            ],
+            children: [const BasemapLayer()],
           ),
           // Fixed center crosshair: pinned to the screen center (NOT a map
           // marker layer, which would pan/zoom with the map) — the user
