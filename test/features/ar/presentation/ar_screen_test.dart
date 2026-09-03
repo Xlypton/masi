@@ -661,7 +661,7 @@ void main() {
                 // exactly the same overlay/toggle/gesture code path a real
                 // UiKitView would sit underneath on-device.
                 cameraView: Container(key: const Key('fake-camera-view')),
-                routes: [route],
+                routes: const [route],
                 refSize: refSize,
                 outline: outline,
                 startError: startError,
@@ -798,7 +798,7 @@ void main() {
       container
           .read(arControllerProvider.notifier)
           .onAlignment(
-            ArAlignment(
+            const ArAlignment(
               confidence: 0.0,
               tracking: true,
               screenCorners: corners,
@@ -986,7 +986,7 @@ void main() {
         container
             .read(arControllerProvider.notifier)
             .onAlignment(
-              ArAlignment(
+              const ArAlignment(
                 confidence: 0.0,
                 tracking: false,
                 screenCorners: [
@@ -1108,7 +1108,7 @@ void main() {
         container
             .read(arControllerProvider.notifier)
             .onAlignment(
-              ArAlignment(
+              const ArAlignment(
                 confidence: 0.0,
                 tracking: true,
                 screenCorners: [
@@ -1168,10 +1168,10 @@ void main() {
         container
             .read(arControllerProvider.notifier)
             .onAlignment(
-              ArAlignment(
+              const ArAlignment(
                 confidence: 0.0,
                 tracking: true,
-                screenCorners: const [
+                screenCorners: [
                   Offset(50, 50),
                   Offset(350, 50),
                   Offset(350, 750),

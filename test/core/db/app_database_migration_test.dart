@@ -1866,7 +1866,7 @@ void main() {
 
       // Spot-check the SyncColumns set on each of the 3 new tables by
       // inserting a minimal row and reading every mixin column back.
-      final now = 5000;
+      const now = 5000;
 
       await db
           .into(db.areas)

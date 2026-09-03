@@ -50,7 +50,7 @@ import 'package:path/path.dart' as p;
 import '../../../support/fixture_photo.dart';
 
 const String _uid = 'user-u1';
-final AuthSessionState _signedIn = AuthSessionState.signedIn(
+const AuthSessionState _signedIn = AuthSessionState.signedIn(
   'u1@example.com',
   uid: _uid,
 );

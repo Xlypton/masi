@@ -4778,7 +4778,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            ToposScreen(),
+            const ToposScreen(),
           ),
         );
         await _drain(tester);
@@ -4909,7 +4909,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            ToposScreen(),
+            const ToposScreen(),
           ),
         );
         await _drain(tester);

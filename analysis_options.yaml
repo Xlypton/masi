@@ -76,6 +76,26 @@ linter:
   # Both are worth revisiting as their own scoped cleanup; neither earns its
   # churn as a drive-by.
   rules:
+    # PERFORMANCE. `package:flutter_lints` ships
+    # `prefer_const_constructors_in_immutables` (which only asks that a widget's
+    # own constructor BE const) but not `prefer_const_constructors` (which asks
+    # that CALLS to it be const), so nothing was enforcing the half that
+    # actually affects frame time. A non-const widget call is reallocated and
+    # deep-compared on every rebuild instead of compared by identity and
+    # skipped.
+    #
+    # Adopted together with a `dart fix --apply` pass, so this PINS the property
+    # rather than starting a cleanup — the same argument the strict language
+    # modes above are adopted on. Measure the cost honestly before quoting it:
+    # `flutter analyze` covers lib AND test, and the combined number (~360
+    # sites) is the one that is easy to reach for and wrong. Only the 31 sites
+    # across 11 files in `lib/` are on a rebuild path and affect a real frame;
+    # the rest are test scaffolding, fixed for consistency and costing nothing
+    # at runtime.
+    - prefer_const_constructors
+    - prefer_const_constructors_in_immutables
+    - prefer_const_declarations
+    - prefer_const_literals_to_create_immutables
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
 

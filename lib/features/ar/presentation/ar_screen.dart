@@ -892,7 +892,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
             ScaffoldMessenger.maybeOf(context)?.showMasiToast(
               'Hold steady on the wall, then tap Lock again.',
               kind: MasiToastKind.warning,
-              duration: Duration(seconds: 2),
+              duration: const Duration(seconds: 2),
             );
           }
         }

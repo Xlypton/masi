@@ -45,7 +45,7 @@ void main() {
 
     test('grade-only: keeps entries whose gradeSortKey falls in range, '
         'excludes out-of-range and ungraded entries', () {
-      final filter = LogbookFilter(
+      const filter = LogbookFilter(
         grade: GradeRange(
           minToken: '6a',
           maxToken: '7a',
@@ -106,10 +106,10 @@ void main() {
     });
 
     test('combined facets AND together', () {
-      final filter = LogbookFilter(
+      const filter = LogbookFilter(
         grade: GradeRange(minToken: '6a', maxToken: '7c'),
-        routeStyles: const {'sport'},
-        ascentTypes: const {AscentStyle.redpoint},
+        routeStyles: {'sport'},
+        ascentTypes: {AscentStyle.redpoint},
       );
 
       expect(

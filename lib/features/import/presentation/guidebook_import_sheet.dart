@@ -111,7 +111,7 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
     ScaffoldMessenger.of(context).showMasiToast(
       'Prompt copied. Paste it in your chat app with both photos.',
       kind: MasiToastKind.success,
-      key: Key('import-prompt-copied'),
+      key: const Key('import-prompt-copied'),
     );
   }
 
@@ -178,7 +178,7 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
       ScaffoldMessenger.of(context).showMasiToast(
         "Couldn't add those routes. Nothing was changed.",
         kind: MasiToastKind.error,
-        key: Key('import-apply-failed'),
+        key: const Key('import-apply-failed'),
       );
     }
   }

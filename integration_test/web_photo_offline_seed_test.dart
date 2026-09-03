@@ -298,7 +298,7 @@ void main() {
     //    find both the pixels and the row, and the window is deliberately
     //    stated here rather than hidden in a sleep.
     final settleDeadline = DateTime.now().add(
-      Duration(seconds: kSettleSeconds),
+      const Duration(seconds: kSettleSeconds),
     );
     while (DateTime.now().isBefore(settleDeadline)) {
       await tester.pump(const Duration(milliseconds: 100));

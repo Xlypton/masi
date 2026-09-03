@@ -2443,7 +2443,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     messenger.showMasiToast(
       'Sent to the owner',
       kind: MasiToastKind.success,
-      key: Key('topo-proposal-sent'),
+      key: const Key('topo-proposal-sent'),
     );
   }
 
@@ -2467,7 +2467,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       children: [
         IconButton(
           key: const Key('topo-back-button'),
-          icon: MasiIcon('chevron_left'),
+          icon: const MasiIcon('chevron_left'),
           tooltip: 'Back',
           onPressed: () {
             if (context.canPop()) {
@@ -2631,7 +2631,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-ar-button'),
-          icon: MasiIcon('ar_peak'),
+          icon: const MasiIcon('ar_peak'),
           tooltip: arSupported ? 'View in AR' : 'AR is available on iOS only',
           onPressed: arSupported
               ? () => context.push('/walls/${widget.wallId}/ar')
@@ -2670,7 +2670,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-add-photo-button'),
-          icon: MasiIcon('image_add'),
+          icon: const MasiIcon('image_add'),
           tooltip: 'Add a photo',
           onPressed: _pickImage,
           color: colors.accent,
@@ -2734,7 +2734,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             // glyph is the AFFORDANCE for what tapping it does, not a mirror
             // of the current mode — in view mode (the mode every topo opens
             // in) it shows the edit/pencil glyph ("tap to edit").
-            icon: MasiIcon('edit'),
+            icon: const MasiIcon('edit'),
             tooltip: 'Edit',
             onPressed: () {
               drawNotifier.toggleMode();
@@ -2768,7 +2768,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-edit-location-button'),
-          icon: MasiIcon('pin'),
+          icon: const MasiIcon('pin'),
           tooltip: hasCoords ? 'Edit location' : 'Set location',
           onPressed: () => _handleEditLocation(currentTopo),
           color: colors.accent,
@@ -2806,11 +2806,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         IconButton(
           key: const Key('topo-import-guidebook-button'),
           icon: waiting.isEmpty
-              ? MasiIcon('scan')
+              ? const MasiIcon('scan')
               : Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    MasiIcon('scan'),
+                    const MasiIcon('scan'),
                     Positioned(
                       right: -2,
                       top: -2,
@@ -2869,7 +2869,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             isLoading: locationUnknown,
             color: colors.accent,
             semanticLabel: 'Checking this wall for a location',
-            child: MasiIcon('topo_map'),
+            child: const MasiIcon('topo_map'),
           ),
           tooltip: locationUnknown
               ? 'Checking for a location…'
@@ -3034,7 +3034,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             children: [
               IconButton(
                 key: const Key('topo-undo-button'),
-                icon: MasiIcon('undo'),
+                icon: const MasiIcon('undo'),
                 tooltip: 'Undo',
                 onPressed: drawNotifier.undo,
                 color: colors.accent,
@@ -3042,7 +3042,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               ),
               IconButton(
                 key: const Key('topo-redo-button'),
-                icon: MasiIcon('redo'),
+                icon: const MasiIcon('redo'),
                 tooltip: 'Redo',
                 onPressed: drawNotifier.redo,
                 color: colors.accent,
@@ -3050,7 +3050,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               ),
               IconButton(
                 key: const Key('topo-clear-button'),
-                icon: MasiIcon('close'),
+                icon: const MasiIcon('close'),
                 // Two jobs, one glyph — see [_handleCancelEditing] for why the
                 // split is deliberate. The tooltip has to track it, or the
                 // control lies about what a tap will do.

@@ -21,14 +21,14 @@ void main() {
   }
 
   test('a signed-in emission remembers the uid', () {
-    run(AsyncData(AuthSessionState.signedIn('a@b.c', uid: 'user-u1')));
+    run(const AsyncData(AuthSessionState.signedIn('a@b.c', uid: 'user-u1')));
     expect(remembered, ['user-u1']);
     expect(forgotten, 0);
   });
 
   test('an account switch remembers the new uid', () {
-    run(AsyncData(AuthSessionState.signedIn('a@b.c', uid: 'user-u1')));
-    run(AsyncData(AuthSessionState.signedIn('b@b.c', uid: 'user-u2')));
+    run(const AsyncData(AuthSessionState.signedIn('a@b.c', uid: 'user-u1')));
+    run(const AsyncData(AuthSessionState.signedIn('b@b.c', uid: 'user-u2')));
     expect(remembered, ['user-u1', 'user-u2']);
     expect(forgotten, 0);
   });
@@ -81,7 +81,7 @@ void main() {
   });
 
   test('an empty uid is ignored rather than remembered', () {
-    run(AsyncData(AuthSessionState.signedIn('a@b.c', uid: '')));
+    run(const AsyncData(AuthSessionState.signedIn('a@b.c', uid: '')));
     expect(remembered, isEmpty);
     expect(forgotten, 0);
   });

@@ -684,8 +684,8 @@ class FakeStoragePersistenceService implements StoragePersistenceService {
 const _signedOut = AuthSessionState.signedOut();
 const _uidU1 = 'user-u1';
 const _uidU2 = 'user-u2';
-final _signedInU1 = AuthSessionState.signedIn('u1@example.com', uid: _uidU1);
-final _signedInU2 = AuthSessionState.signedIn('u2@example.com', uid: _uidU2);
+const _signedInU1 = AuthSessionState.signedIn('u1@example.com', uid: _uidU1);
+const _signedInU2 = AuthSessionState.signedIn('u2@example.com', uid: _uidU2);
 
 int _counter = 0;
 

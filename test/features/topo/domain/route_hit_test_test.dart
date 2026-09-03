@@ -150,7 +150,7 @@ void main() {
       );
 
       // Tap equidistant (0.5) from both vertical routes at x=0 and x=1.
-      final tap = Offset(0.5, 0.5);
+      const tap = Offset(0.5, 0.5);
 
       final resultInOrder = hitTestRoute(tap, [routeLow, routeHigh], 0.5);
       expect(resultInOrder, 1);

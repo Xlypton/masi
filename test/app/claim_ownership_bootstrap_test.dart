@@ -14,7 +14,7 @@ void main() {
 
         handleAuthStateForClaimOwnership(
           const AsyncValue.data(AuthSessionState.signedOut()),
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
           claim,
         );
 
@@ -31,7 +31,7 @@ void main() {
 
         handleAuthStateForClaimOwnership(
           const AsyncValue.loading(),
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
           claim,
         );
 
@@ -48,7 +48,7 @@ void main() {
 
         handleAuthStateForClaimOwnership(
           null,
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
           claim,
         );
 
@@ -64,8 +64,8 @@ void main() {
         Future<void> claim(String uid) async => calls.add(uid);
 
         handleAuthStateForClaimOwnership(
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
           claim,
         );
 
@@ -84,7 +84,7 @@ void main() {
       Future<void> claim(String uid) async => calls.add(uid);
 
       handleAuthStateForClaimOwnership(
-        AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+        const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
         const AsyncValue.data(AuthSessionState.signedOut()),
         claim,
       );
@@ -133,7 +133,7 @@ void main() {
             StateError('Supabase not initialized'),
             StackTrace.empty,
           ),
-          AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+          const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
           claim,
         );
         expect(calls, ['u1']);
@@ -151,7 +151,7 @@ void main() {
         expect(
           () => handleAuthStateForClaimOwnership(
             const AsyncValue.data(AuthSessionState.signedOut()),
-            AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
+            const AsyncValue.data(AuthSessionState.signedIn('a@b.com', uid: 'u1')),
             failingClaim,
           ),
           returnsNormally,

@@ -30,7 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('bootApp exposes an injectable {List<Override> overrides} seam', () {
-    final Future<void> Function({List<Override> overrides}) seam = bootApp;
+    const Future<void> Function({List<Override> overrides}) seam = bootApp;
     expect(seam, isNotNull);
   });
 }

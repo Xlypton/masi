@@ -351,7 +351,7 @@ void main() {
         await route.upsertRoute(
           wallId,
           originalPhotoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
         );
         // A child `Photos` row (parentPhotoId set) — deleteOriginalPhoto's
         // cascade covers any child photo, regardless of what created it. A

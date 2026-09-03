@@ -144,11 +144,11 @@ void main() {
       '-- only the requested route\'s id gets handles',
       () {
         final target = committedRoute(id: 1);
-        final other = TopoRoute(
+        const other = TopoRoute(
           id: 2,
           number: 2,
           colorIndex: 1,
-          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          points: [Offset(0.2, 0.8), Offset(0.7, 0.2)],
         );
         final painter = buildPainter(routes: [target, other], editableRouteId: 1);
         final canvas = _RecordingCanvas();
@@ -164,12 +164,12 @@ void main() {
       'an invisible route matching editableRouteId paints no handles -- '
       'a route must be present AND visible',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
           visible: false,
-          points: const [
+          points: [
             Offset(0.1, 0.2),
             Offset(0.5, 0.5),
             Offset(0.8, 0.1),

@@ -73,11 +73,11 @@ void main() {
   test(
     'A1: upsertRoute then loadRoutes round-trips points/symbols/number/colorIndex',
     () async {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(1.5, 2.5), Offset(10.25, 20.75)],
-        symbols: const [
+        points: [Offset(1.5, 2.5), Offset(10.25, 20.75)],
+        symbols: [
           TopoSymbol(type: SymbolType.anchor, position: Offset(1.5, 2.5)),
           TopoSymbol(type: SymbolType.crux, position: Offset(3.0, 4.0)),
         ],
@@ -99,10 +99,10 @@ void main() {
   test(
     'upsertRoute persists visible:false and loadRoutes round-trips it',
     () async {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         visible: false,
       );
 
@@ -117,10 +117,10 @@ void main() {
   test(
     'upsertRoute persists visible:true and loadRoutes round-trips it',
     () async {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         visible: true,
       );
 
@@ -135,18 +135,18 @@ void main() {
   test(
     'updating a route to visible:false is not filtered out by loadRoutes',
     () async {
-      final v1 = TopoRoute(
+      const v1 = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         visible: true,
       );
       await repo.upsertRoute(wallId, photoId, v1);
 
-      final v2 = TopoRoute(
+      const v2 = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         visible: false,
       );
       await repo.upsertRoute(wallId, photoId, v2);
@@ -158,18 +158,18 @@ void main() {
   );
 
   test('upsertRoute updates the existing row for the same number', () async {
-    final v1 = TopoRoute(
+    const v1 = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(0, 0)],
+      points: [Offset(0, 0)],
       colorIndex: 0,
     );
     await repo.upsertRoute(wallId, photoId, v1);
 
-    final v2 = TopoRoute(
+    const v2 = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(9, 9), Offset(8, 8)],
+      points: [Offset(9, 9), Offset(8, 8)],
       colorIndex: 5,
     );
     await repo.upsertRoute(wallId, photoId, v2);
@@ -186,7 +186,7 @@ void main() {
   test(
     'A2: softDeleteRoute tombstones the row instead of removing it',
     () async {
-      final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+      const route = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
       await repo.upsertRoute(wallId, photoId, route);
 
       await repo.softDeleteRoute(wallId, photoId, 1);
@@ -206,17 +206,17 @@ void main() {
     await repo.upsertRoute(
       wallId,
       photoId,
-      TopoRoute(id: 1, number: 3, points: const [Offset(0, 0)]),
+      const TopoRoute(id: 1, number: 3, points: [Offset(0, 0)]),
     );
     await repo.upsertRoute(
       wallId,
       photoId,
-      TopoRoute(id: 2, number: 1, points: const [Offset(0, 0)]),
+      const TopoRoute(id: 2, number: 1, points: [Offset(0, 0)]),
     );
     await repo.upsertRoute(
       wallId,
       photoId,
-      TopoRoute(id: 3, number: 2, points: const [Offset(0, 0)]),
+      const TopoRoute(id: 3, number: 2, points: [Offset(0, 0)]),
     );
 
     final loaded = await repo.loadRoutes(wallId, photoId);
@@ -228,14 +228,14 @@ void main() {
   test('fix (c): soft-deleting a route then upserting a new live route with '
       'the same (wallId, number) succeeds, and loadRoutes returns only the '
       'new one', () async {
-    final v1 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+    const v1 = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
     await repo.upsertRoute(wallId, photoId, v1);
     await repo.softDeleteRoute(wallId, photoId, 1);
 
-    final v2 = TopoRoute(
+    const v2 = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(9, 9)],
+      points: [Offset(9, 9)],
       colorIndex: 2,
     );
     await repo.upsertRoute(wallId, photoId, v2);
@@ -258,7 +258,7 @@ void main() {
       'v16 it is wall+number that is enforced — see T-route-is-a-climb '
       'below, where redrawing the same number on another photo produces a '
       'LINE rather than a second row', () async {
-    final v1 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+    const v1 = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
     await repo.upsertRoute(wallId, photoId, v1);
 
     // Bypass RouteRepository.upsertRoute's own existing-row check to
@@ -288,10 +288,10 @@ void main() {
 
   test('M4 A2: upsertRoute(insert path) then loadRoutes round-trips all '
       'metadata fields', () async {
-    final route = TopoRoute(
+    const route = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(0, 0)],
+      points: [Offset(0, 0)],
       name: 'Le Toit',
       gradeSystem: GradeSystem.french,
       gradeRaw: '6a+',
@@ -314,7 +314,7 @@ void main() {
   });
 
   test('M4 A2: a route with no metadata round-trips as all-null', () async {
-    final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+    const route = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
 
     await repo.upsertRoute(wallId, photoId, route);
     final loaded = await repo.loadRoutes(wallId, photoId);
@@ -333,10 +333,10 @@ void main() {
     'M4 A3: upserting an existing (wallId,number) route with changed '
     'metadata updates it (proving the UPDATE branch writes all 6 fields)',
     () async {
-      final v1 = TopoRoute(
+      const v1 = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         name: 'Old Name',
         gradeSystem: GradeSystem.french,
         gradeRaw: '5a',
@@ -346,10 +346,10 @@ void main() {
       );
       await repo.upsertRoute(wallId, photoId, v1);
 
-      final v2 = TopoRoute(
+      const v2 = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0, 0)],
+        points: [Offset(0, 0)],
         name: 'New Name',
         gradeSystem: GradeSystem.uiaa,
         gradeRaw: 'VI+',
@@ -378,10 +378,10 @@ void main() {
       'metadata via the standard TopoRoute (?? this.x) semantics is NOT '
       'expected — copyWith is domain-only; the repository always writes '
       'exactly what the route carries', () async {
-    final v1 = TopoRoute(
+    const v1 = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(0, 0)],
+      points: [Offset(0, 0)],
       name: 'Has Metadata',
       gradeSystem: GradeSystem.french,
       gradeRaw: '5a',
@@ -391,7 +391,7 @@ void main() {
     );
     await repo.upsertRoute(wallId, photoId, v1);
 
-    final v2 = TopoRoute(id: 1, number: 1, points: const [Offset(1, 1)]);
+    const v2 = TopoRoute(id: 1, number: 1, points: [Offset(1, 1)]);
     await repo.upsertRoute(wallId, photoId, v2);
 
     final loaded = await repo.loadRoutes(wallId, photoId);
@@ -408,10 +408,10 @@ void main() {
   test('M4 cleanup coverage: a fractional gradeSortKey (e.g. a UIAA grade '
       'landing between whole shared-scale indices) round-trips through '
       'upsertRoute/loadRoutes exactly, without integer truncation', () async {
-    final route = TopoRoute(
+    const route = TopoRoute(
       id: 1,
       number: 1,
-      points: const [Offset(0, 0)],
+      points: [Offset(0, 0)],
       gradeSystem: GradeSystem.uiaa,
       gradeRaw: 'VII-',
       gradeSortKey: 8.5,
@@ -431,7 +431,7 @@ void main() {
     await repoAtT1.upsertRoute(
       wallId,
       photoId,
-      TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+      const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
     );
     final afterInsert = await db.select(db.routes).getSingle();
     expect(afterInsert.createdAt, 1000);
@@ -440,7 +440,7 @@ void main() {
     await repoAtT2.upsertRoute(
       wallId,
       photoId,
-      TopoRoute(id: 1, number: 1, points: const [Offset(1, 1)]),
+      const TopoRoute(id: 1, number: 1, points: [Offset(1, 1)]),
     );
     final afterUpdate = await db.select(db.routes).getSingle();
     expect(afterUpdate.createdAt, 1000);
@@ -452,12 +452,12 @@ void main() {
     () {
       test('upsertRoute(insert path) then loadRoutes round-trips betaVideoUrl, '
           'styleTags (incl. a custom tag), and stars', () async {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
+          points: [Offset(0, 0)],
           betaVideoUrl: 'https://example.com/beta',
-          styleTags: const ['dyno', 'my-custom-style'],
+          styleTags: ['dyno', 'my-custom-style'],
           stars: 3,
         );
 
@@ -473,11 +473,11 @@ void main() {
 
       test('an empty styleTags list round-trips as a null column (not the '
           'encoded empty array)', () async {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
-          styleTags: const [],
+          points: [Offset(0, 0)],
+          styleTags: [],
         );
 
         await repo.upsertRoute(wallId, photoId, route);
@@ -491,7 +491,7 @@ void main() {
 
       test('a route with no betaVideoUrl/styleTags/stars round-trips as '
           'null/empty/null', () async {
-        final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+        const route = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
 
         await repo.upsertRoute(wallId, photoId, route);
         final loaded = await repo.loadRoutes(wallId, photoId);
@@ -505,22 +505,22 @@ void main() {
 
       test('upsertRoute(update path) overwrites a previously-set betaVideoUrl/ '
           'styleTags/stars with new values', () async {
-        final v1 = TopoRoute(
+        const v1 = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
+          points: [Offset(0, 0)],
           betaVideoUrl: 'https://example.com/old',
-          styleTags: const ['dyno'],
+          styleTags: ['dyno'],
           stars: 1,
         );
         await repo.upsertRoute(wallId, photoId, v1);
 
-        final v2 = TopoRoute(
+        const v2 = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
+          points: [Offset(0, 0)],
           betaVideoUrl: 'https://example.com/new',
-          styleTags: const ['crimpy', 'juggy'],
+          styleTags: ['crimpy', 'juggy'],
           stars: 3,
         );
         await repo.upsertRoute(wallId, photoId, v2);
@@ -537,17 +537,17 @@ void main() {
 
       test('upsertRoute(update path) clears a previously-set betaVideoUrl/ '
           'styleTags/stars when the new route carries none', () async {
-        final v1 = TopoRoute(
+        const v1 = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
+          points: [Offset(0, 0)],
           betaVideoUrl: 'https://example.com/old',
-          styleTags: const ['dyno'],
+          styleTags: ['dyno'],
           stars: 2,
         );
         await repo.upsertRoute(wallId, photoId, v1);
 
-        final v2 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+        const v2 = TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]);
         await repo.upsertRoute(wallId, photoId, v2);
 
         final loaded = await repo.loadRoutes(wallId, photoId);
@@ -571,7 +571,7 @@ void main() {
       await owned.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
 
       final raw = await db.select(db.routes).getSingle();
@@ -582,7 +582,7 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
 
       final raw = await db.select(db.routes).getSingle();
@@ -600,7 +600,7 @@ void main() {
         await owned.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
         );
 
         // A later update, even from a different (or signed-out) session,
@@ -609,7 +609,7 @@ void main() {
         await laterSignedOut.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(9, 9)]),
         );
 
         final raw = await db.select(db.routes).getSingle();
@@ -643,20 +643,20 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(
+        const TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0, 0)],
+          points: [Offset(0, 0)],
           name: 'Arete',
         ),
       );
       await repo.upsertRoute(
         wallId,
         photoIdB,
-        TopoRoute(
+        const TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(9, 9)],
+          points: [Offset(9, 9)],
           name: 'Arete',
         ),
       );
@@ -690,15 +690,15 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
       await repo.upsertRoute(
         wallId,
         photoIdB,
-        TopoRoute(
+        const TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(9, 9)],
+          points: [Offset(9, 9)],
           name: 'Renamed from the other photo',
           stars: 3,
         ),
@@ -718,12 +718,12 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
         );
         await repo.upsertRoute(
           wallId,
           photoIdB,
-          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(9, 9)]),
         );
 
         final fromA = await repo.routeDbIdsByNumber(wallId, photoId);
@@ -742,12 +742,12 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
       await repo.upsertRoute(
         wallId,
         photoIdB,
-        TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(9, 9)]),
       );
 
       await repo.softDeleteRoute(wallId, photoIdB, 1);
@@ -774,12 +774,12 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
         );
         await repo.upsertRoute(
           wallId,
           photoIdB,
-          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(9, 9)]),
         );
 
         await repo.softDeleteRoute(wallId, photoId, 1);
@@ -813,7 +813,7 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
         );
 
         await repo.softDeleteRoute(wallId, photoId, 1);
@@ -829,12 +829,12 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
       await repo.upsertRoute(
         wallId,
         photoIdB,
-        TopoRoute(id: 1, number: 2, points: const [Offset(5, 5)]),
+        const TopoRoute(id: 1, number: 2, points: [Offset(5, 5)]),
       );
 
       final routeRows = await db.select(db.routes).get();
@@ -879,20 +879,20 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoId,
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0, 0)],
+            points: [Offset(0, 0)],
             name: 'Arete',
           ),
         );
         await repo.upsertRoute(
           wallId,
           photoIdB,
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(9, 9)],
+            points: [Offset(9, 9)],
             name: 'Arete',
           ),
         );
@@ -900,7 +900,7 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoIdB,
-          TopoRoute(id: 2, number: 2, points: const [Offset(4, 4)]),
+          const TopoRoute(id: 2, number: 2, points: [Offset(4, 4)]),
         );
 
         final counts = await repo.watchRouteCountsByPhoto(wallId).first;
@@ -912,7 +912,7 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
 
       final counts = await repo.watchRouteCountsByPhoto(wallId).first;
@@ -924,12 +924,12 @@ void main() {
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
       );
       await repo.upsertRoute(
         wallId,
         photoId,
-        TopoRoute(id: 2, number: 2, points: const [Offset(1, 1)]),
+        const TopoRoute(id: 2, number: 2, points: [Offset(1, 1)]),
       );
       await repo.softDeleteRoute(wallId, photoId, 2);
 

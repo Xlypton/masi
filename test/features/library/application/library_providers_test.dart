@@ -195,7 +195,7 @@ void main() {
       'in an ERROR state (native silent-empty-library bug)',
       () async {
         final auth = StreamingFakeAuthRepository(
-          AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
+          const AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
         );
         addTearDown(auth.dispose);
         final container = _makeContainer(
@@ -245,7 +245,7 @@ void main() {
       'still emits own topos after a sessionExpired sign-out (L4 read half)',
       () async {
         final auth = StreamingFakeAuthRepository(
-          AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
+          const AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
         );
         addTearDown(auth.dispose);
         final container = _makeContainer(
@@ -288,7 +288,7 @@ void main() {
 
     test('emits an empty list after a user-initiated sign-out', () async {
       final auth = StreamingFakeAuthRepository(
-        AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
+        const AuthSessionState.signedIn('u1@example.com', uid: 'user-u1'),
       );
       addTearDown(auth.dispose);
       final container = _makeContainer(

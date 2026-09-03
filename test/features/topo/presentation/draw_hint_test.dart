@@ -73,7 +73,7 @@ Future<ProviderContainer> _pumpCanvas(WidgetTester tester) async {
         home: Scaffold(
           body: Column(
             children: [
-              SymbolPaletteBar(wallId: _testWallId),
+              const SymbolPaletteBar(wallId: _testWallId),
               Expanded(
                 child: TopoCanvas(
                   wallId: _testWallId,

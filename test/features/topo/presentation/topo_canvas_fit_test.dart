@@ -127,7 +127,7 @@ void main() {
         imageSize: imageSize,
         viewportSize: viewportSize,
       );
-      final fillScale = 800 / 1200;
+      const fillScale = 800 / 1200;
 
       expect(matrix.getMaxScaleOnAxis(), closeTo(fillScale, epsilon));
 
@@ -413,7 +413,7 @@ void main() {
           expect(topLeft.dx, closeTo(0.0, epsilon));
           expect(bottomRight.dx, closeTo(viewportSize.width, epsilon));
 
-          final renderedHeight = 800 * (400 / 600);
+          const renderedHeight = 800 * (400 / 600);
           final bottomSlack = viewportSize.height - renderedHeight;
           expect(bottomSlack, greaterThan(0));
           expect(bottomSlack, closeTo(266.7, 0.1));

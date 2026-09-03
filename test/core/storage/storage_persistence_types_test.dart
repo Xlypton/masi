@@ -36,9 +36,9 @@ void main() {
       // Deliberately NON-const so the two instances are genuinely distinct
       // objects: two identical `const` literals are canonicalised to the
       // same instance and would pass even without an `operator ==`.
-      final a = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2);
-      final b = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2);
-      final c = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 3);
+      const a = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2);
+      const b = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2);
+      const c = StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 3);
 
       expect(a, b);
       expect(a.hashCode, b.hashCode);
@@ -56,22 +56,22 @@ void main() {
     });
 
     test('is value-equal on all three fields', () {
-      final a = StoragePersistenceStatus(
+      const a = StoragePersistenceStatus(
         outcome: StoragePersistOutcome.granted,
         persisted: true,
         estimate: StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2),
       );
-      final b = StoragePersistenceStatus(
+      const b = StoragePersistenceStatus(
         outcome: StoragePersistOutcome.granted,
         persisted: true,
         estimate: StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2),
       );
-      final differentOutcome = StoragePersistenceStatus(
+      const differentOutcome = StoragePersistenceStatus(
         outcome: StoragePersistOutcome.denied,
         persisted: true,
         estimate: StorageEstimateSnapshot(usageBytes: 1, quotaBytes: 2),
       );
-      final differentEstimate = StoragePersistenceStatus(
+      const differentEstimate = StoragePersistenceStatus(
         outcome: StoragePersistOutcome.granted,
         persisted: true,
         estimate: StorageEstimateSnapshot(usageBytes: 9, quotaBytes: 2),

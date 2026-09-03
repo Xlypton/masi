@@ -189,7 +189,7 @@ void main() {
         await tester.runAsync(() => _seedCommunityWall(db));
 
         await tester.pumpWidget(
-          _wrap(container, CommunityMapScreen()),
+          _wrap(container, const CommunityMapScreen()),
         );
         await _drain(tester);
 
@@ -219,7 +219,7 @@ void main() {
         await tester.runAsync(() => _seedOwnWall(db));
 
         await tester.pumpWidget(
-          _wrap(container, CommunityMapScreen()),
+          _wrap(container, const CommunityMapScreen()),
         );
         await _drain(tester);
 

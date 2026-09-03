@@ -253,21 +253,21 @@ void main() {
   group('VerificationSummary', () {
     test('counts both directions', () {
       final summary = VerificationSummary.of([
-        TopoVerification(
+        const TopoVerification(
           id: '1',
           wallId: 'w1',
           authorId: 'a',
           accurate: true,
           createdAt: 1,
         ),
-        TopoVerification(
+        const TopoVerification(
           id: '2',
           wallId: 'w1',
           authorId: 'b',
           accurate: true,
           createdAt: 2,
         ),
-        TopoVerification(
+        const TopoVerification(
           id: '3',
           wallId: 'w1',
           authorId: 'c',
@@ -295,7 +295,7 @@ void main() {
               accurate: true,
               createdAt: i,
             ),
-          TopoVerification(
+          const TopoVerification(
             id: 'no',
             wallId: 'w1',
             authorId: 'z',

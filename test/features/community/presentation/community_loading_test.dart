@@ -229,7 +229,7 @@ void main() {
               sharedTopos: Stream.value(const <SharedTopo>[]),
               locationService: location,
             ),
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await drainAsync(tester, settle: false);

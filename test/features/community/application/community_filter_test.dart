@@ -44,8 +44,8 @@ void main() {
     });
 
     test('grade-only: matches iff ANY routeGradeKey falls in range', () {
-      final filter = CommunityFilter(
-        grade: const GradeRange(minToken: '6a', maxToken: '7a'),
+      const filter = CommunityFilter(
+        grade: GradeRange(minToken: '6a', maxToken: '7a'),
       );
       expect(filter.isActive, isTrue);
 
@@ -85,9 +85,9 @@ void main() {
       'both active: a topo must satisfy the grade range AND the style '
       'selection (independently -- not necessarily via the same route)',
       () {
-        final filter = CommunityFilter(
-          grade: const GradeRange(minToken: '6a', maxToken: '7a'),
-          styles: const {'sport'},
+        const filter = CommunityFilter(
+          grade: GradeRange(minToken: '6a', maxToken: '7a'),
+          styles: {'sport'},
         );
 
         // Satisfies grade (9.0 in range) AND style ('sport' present).
@@ -186,9 +186,9 @@ void main() {
       'combines (AND) correctly with an active grade filter: both must '
       'pass independently',
       () {
-        final filter = CommunityFilter(
-          grade: const GradeRange(minToken: '6a', maxToken: '7a'),
-          styleTags: const {'crimpy'},
+        const filter = CommunityFilter(
+          grade: GradeRange(minToken: '6a', maxToken: '7a'),
+          styleTags: {'crimpy'},
         );
 
         // Grade in range AND tag present -> matches.
@@ -285,7 +285,7 @@ void main() {
     test(
       'a topo must match BOTH the name search and the grade/style filter',
       () {
-        final filter = const CommunityFilter(styles: {'sport'});
+        const filter = CommunityFilter(styles: {'sport'});
         final topos = [
           topo(wallId: 'w1', name: 'Sunny Wall', routeStyles: {'sport'}),
           topo(wallId: 'w2', name: 'Sunny Slab', routeStyles: {'trad'}),
@@ -299,8 +299,8 @@ void main() {
     );
 
     test('an empty query + an active filter still filters correctly', () {
-      final filter = CommunityFilter(
-        grade: const GradeRange(minToken: '7a'),
+      const filter = CommunityFilter(
+        grade: GradeRange(minToken: '7a'),
       );
       final topos = [
         topo(wallId: 'w1', routeGradeKeys: [13.0]),

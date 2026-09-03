@@ -676,7 +676,7 @@ void main() {
       final db = container.read(appDatabaseProvider);
       await tester.runAsync(() => _seedStandardScenario(db));
 
-      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
       await _drain(tester);
 
       expect(
@@ -754,7 +754,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -824,7 +824,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         expect(_feedRowFinder(), findsNWidgets(2));
@@ -866,7 +866,7 @@ void main() {
         );
       });
 
-      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
       await _drain(tester);
 
       expect(find.byKey(const Key('community-empty')), findsOneWidget);
@@ -1643,7 +1643,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1713,7 +1713,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -1785,7 +1785,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -1829,7 +1829,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1862,7 +1862,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1924,7 +1924,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -1966,7 +1966,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -1998,7 +1998,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2028,7 +2028,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         expect(
@@ -2057,7 +2057,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         expect(_feedRowFinder(), findsNWidgets(2));
@@ -2094,7 +2094,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         // Drive the filter through the provider directly (GradeRangePicker's
@@ -2123,7 +2123,7 @@ void main() {
       final db = container.read(appDatabaseProvider);
       await tester.runAsync(() => _seedFilterScenario(db));
 
-      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
       await _drain(tester);
 
       await tester.tap(find.byKey(const Key('community-filter-button')));
@@ -2170,7 +2170,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         container.read(communityFilterProvider.notifier).setStyles({'boulder'});
@@ -2248,7 +2248,7 @@ void main() {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          wrapWithScale(container, CommunityFeedScreen(), 2.5),
+          wrapWithScale(container, const CommunityFeedScreen(), 2.5),
         );
         await _drain(tester);
         expect(tester.takeException(), isNull);
@@ -2269,7 +2269,7 @@ void main() {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          wrapWithScale(container, CommunityFeedScreen(), 3.0),
+          wrapWithScale(container, const CommunityFeedScreen(), 3.0),
         );
         await _drain(tester);
         expect(tester.takeException(), isNull);
@@ -2364,7 +2364,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2408,7 +2408,7 @@ void main() {
       await tester.runAsync(() => _seedStandardScenario(db));
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2466,7 +2466,7 @@ void main() {
       await tester.runAsync(() => _seedStandardScenario(db));
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2491,7 +2491,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2584,7 +2584,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        _wrap(container, CommunityMapScreen()),
+        _wrap(container, const CommunityMapScreen()),
       );
       await _drain(tester);
 
@@ -2667,7 +2667,7 @@ void main() {
         await tester.pumpWidget(
           _wrapWithDetailRoute(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -2762,7 +2762,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        wrapWithScale(container, CommunityFeedScreen(), 3.0),
+        wrapWithScale(container, const CommunityFeedScreen(), 3.0),
       );
       await _drain(tester);
 
@@ -2853,7 +2853,7 @@ void main() {
         });
 
         await tester.pumpWidget(
-          wrapWithScale(container, CommunityFeedScreen(), 1.0),
+          wrapWithScale(container, const CommunityFeedScreen(), 1.0),
         );
         await _drain(tester);
 
@@ -2907,7 +2907,7 @@ void main() {
         });
 
         await tester.pumpWidget(
-          wrapWithScale(container, CommunityFeedScreen(), 3.0),
+          wrapWithScale(container, const CommunityFeedScreen(), 3.0),
         );
         await _drain(tester);
 
@@ -2936,7 +2936,7 @@ void main() {
       });
 
       await tester.pumpWidget(
-        wrapWithScale(container, CommunityFeedScreen(), 1.0),
+        wrapWithScale(container, const CommunityFeedScreen(), 1.0),
       );
       await _drain(tester);
 
@@ -3003,7 +3003,7 @@ void main() {
         );
       });
 
-      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
       await _drain(tester);
 
       expect(tester.takeException(), isNull);
@@ -3059,7 +3059,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           container,
-          CommunityMapScreen(
+          const CommunityMapScreen(
             focusWallId: 'wall-focus',
           ),
         ),
@@ -3104,7 +3104,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(
+            const CommunityMapScreen(
               focusWallId: 'does-not-exist',
             ),
           ),
@@ -3128,7 +3128,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3275,7 +3275,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3516,7 +3516,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -3543,7 +3543,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -3581,7 +3581,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -3651,7 +3651,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);

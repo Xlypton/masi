@@ -31,7 +31,7 @@ void main() {
           buttonKey: _key,
           tooltip: 'Delete',
           onPressed: () => completer.future,
-          icon: MasiIcon('delete'),
+          icon: const MasiIcon('delete'),
         ),
       ),
     );
@@ -78,7 +78,7 @@ void main() {
                 reportBusy(true);
                 await write.future;
               },
-              icon: MasiIcon('delete'),
+              icon: const MasiIcon('delete'),
             ),
           ),
         ),
@@ -123,7 +123,7 @@ void main() {
             calls++;
             await gate.future;
           },
-          icon: MasiIcon('edit'),
+          icon: const MasiIcon('edit'),
         ),
       ),
     );

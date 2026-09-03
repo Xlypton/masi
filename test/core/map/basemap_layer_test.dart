@@ -31,16 +31,16 @@ import 'package:masi/core/map/basemap_style.dart';
 /// map's constraints loose and its size dependent on this layer.
 Widget _harness(ProviderContainer container) => UncontrolledProviderScope(
   container: container,
-  child: MaterialApp(
+  child: const MaterialApp(
     home: Scaffold(
       body: Stack(
         children: [
           FlutterMap(
-            options: const MapOptions(
+            options: MapOptions(
               initialCenter: LatLng(47.0, 11.0),
               initialZoom: 12,
             ),
-            children: const [BasemapLayer()],
+            children: [BasemapLayer()],
           ),
         ],
       ),

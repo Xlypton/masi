@@ -1029,9 +1029,9 @@ void main() {
         await seed(db);
         // Soft-delete the wall the way the app does (tombstone, row stays).
         await (db.update(db.walls)..where((t) => t.id.equals('wall-1'))).write(
-          WallsCompanion(
-            deletedAt: const Value(999),
-            updatedAt: const Value(999),
+          const WallsCompanion(
+            deletedAt: Value(999),
+            updatedAt: Value(999),
           ),
         );
 

@@ -159,7 +159,7 @@ Widget _wrap(ProviderContainer container) {
       GoRoute(
         path: '/',
         builder: (_, _) =>
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
       ),
       GoRoute(
         path: '/walls/:wallId',

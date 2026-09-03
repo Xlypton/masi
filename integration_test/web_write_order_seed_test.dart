@@ -208,7 +208,7 @@ void main() {
     //    makes the flush window an axis of the experiment rather than a
     //    hidden constant.
     final deadline = DateTime.now().add(
-      Duration(seconds: kOrderSettleSeconds),
+      const Duration(seconds: kOrderSettleSeconds),
     );
     while (DateTime.now().isBefore(deadline)) {
       await tester.pump(const Duration(milliseconds: 100));

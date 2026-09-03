@@ -52,7 +52,7 @@ void main() {
     });
 
     test('a signed-in state never carries a cause', () {
-      final state = AuthSessionState.signedIn('a@b.c', uid: 'u1');
+      const state = AuthSessionState.signedIn('a@b.c', uid: 'u1');
       expect(state.signOutCause, isNull);
     });
 

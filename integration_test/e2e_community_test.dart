@@ -560,12 +560,12 @@ void main() {
       );
       await tapOrFail(
         tester,
-        find.byKey(Key('topo-publish-$wallId')),
+        find.byKey(const Key('topo-publish-$wallId')),
         'the publish/submit entry in the topo overflow menu',
       );
       await waitFor(
         tester,
-        find.byKey(Key('topo-publish-confirm-$wallId')),
+        find.byKey(const Key('topo-publish-confirm-$wallId')),
         'the publish confirmation sheet — this is where myTrustProvider '
         '(the `my_trust` RPC) is actually read',
       );

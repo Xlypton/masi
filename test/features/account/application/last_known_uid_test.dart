@@ -50,7 +50,7 @@ class StreamingFakeAuthRepository implements AuthRepository {
 }
 
 const _signedOut = AuthSessionState.signedOut();
-final _signedInU1 = AuthSessionState.signedIn('u1@example.com', uid: 'user-u1');
+const _signedInU1 = AuthSessionState.signedIn('u1@example.com', uid: 'user-u1');
 
 void main() {
   late AppDatabase db;

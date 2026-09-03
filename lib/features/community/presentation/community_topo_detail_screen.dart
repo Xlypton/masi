@@ -824,7 +824,7 @@ class _CommunityTopoDetailScreenState
               automaticallyImplyLeading: false,
               leading: IconButton(
                 key: const Key('community-detail-back-button'),
-                icon: MasiIcon('chevron_left'),
+                icon: const MasiIcon('chevron_left'),
                 tooltip: 'Back',
                 color: colors.accent,
                 onPressed: () => Navigator.of(context).maybePop(),
@@ -838,7 +838,7 @@ class _CommunityTopoDetailScreenState
                 // sit next to the like button competing for taps.
                 IconButton(
                   key: const Key('community-detail-more-button'),
-                  icon: MasiIcon('more_horiz'),
+                  icon: const MasiIcon('more_horiz'),
                   tooltip: 'More',
                   color: colors.accent,
                   onPressed: () => _openOverflow(wallId),
@@ -1504,7 +1504,7 @@ class _CommunityTopoDetailScreenState
               buttonKey: Key('route-beta-${entry.dbId}'),
               tooltip: 'Watch beta video',
               visualDensity: VisualDensity.compact,
-              icon: MasiIcon('globe'),
+              icon: const MasiIcon('globe'),
               onPressed: () => _launchBetaVideo(route.betaVideoUrl!),
             ),
           OutlinedButton(

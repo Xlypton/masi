@@ -404,7 +404,7 @@ class _NotificationRow extends ConsumerWidget {
         : ref.watch(profileAvatarUrlProvider(actorId)).asData?.value;
 
     final detail = n.detail;
-    final radius = Radius.circular(MasiRadii.card);
+    const radius = Radius.circular(MasiRadii.card);
     final shape = BorderRadius.only(
       topLeft: isFirst ? radius : Radius.zero,
       topRight: isFirst ? radius : Radius.zero,

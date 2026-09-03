@@ -94,7 +94,7 @@ void main() {
   );
 
   test('a negative or absurd count cannot produce a negative score', () {
-    final weird = SharedTopo(
+    const weird = SharedTopo(
       wallId: 'weird',
       name: 'weird',
       routeCount: -5,

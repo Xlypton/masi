@@ -1321,7 +1321,7 @@ class _SearchResultMarker extends StatelessWidget {
       child: Stack(
         alignment: Alignment.bottomCenter,
         children: [
-          MasiIcon('pin_fill', size: totalHeight, color: Colors.white),
+          const MasiIcon('pin_fill', size: totalHeight, color: Colors.white),
           MasiIcon('pin_fill', size: totalHeight - 6, color: colors.accent),
         ],
       ),

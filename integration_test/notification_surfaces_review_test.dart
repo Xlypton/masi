@@ -82,12 +82,12 @@ Widget _toasts(Brightness brightness) => MaterialApp(
   home: Builder(
     builder: (context) => Scaffold(
       backgroundColor: MasiColors.of(context).ground,
-      body: Center(
+      body: const Center(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 15),
+          padding: EdgeInsets.symmetric(horizontal: 15),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: const [
+            children: [
               MasiToastCard(message: 'Location saved', kind: MasiToastKind.success),
               SizedBox(height: 12),
               MasiToastCard(

@@ -231,7 +231,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -296,7 +296,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);

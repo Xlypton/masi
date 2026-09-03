@@ -582,7 +582,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                     InteractiveFlag.scrollWheelZoom,
               ),
             ),
-            children: [const BasemapLayer()],
+            children: const [BasemapLayer()],
           ),
           // Fixed center crosshair: pinned to the screen center (NOT a map
           // marker layer, which would pan/zoom with the map) — the user
@@ -601,7 +601,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                 children: [
                   // White halo behind the crosshair so it stays legible
                   // over the basemap tiles.
-                  MasiIcon('my_location', size: 34, color: Colors.white),
+                  const MasiIcon('my_location', size: 34, color: Colors.white),
                   MasiIcon(
                     'my_location',
                     key: const Key('set-location-crosshair'),
@@ -907,7 +907,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                 key: const Key('set-location-locating'),
                 isLoading: _locating,
                 semanticLabel: 'Finding your location',
-                child: MasiIcon('my_location'),
+                child: const MasiIcon('my_location'),
               ),
             ),
           ),

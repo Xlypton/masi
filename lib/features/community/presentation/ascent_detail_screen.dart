@@ -278,7 +278,7 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
       appBar: AppBar(
         leading: IconButton(
           key: const Key('ascent-detail-back-button'),
-          icon: MasiIcon('chevron_left'),
+          icon: const MasiIcon('chevron_left'),
           tooltip: 'Back',
           color: colors.accent,
           onPressed: () => Navigator.of(context).maybePop(),
@@ -293,7 +293,7 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
           if (adminAction == AdminContentAction.delete)
             IconButton(
               key: const Key('ascent-detail-admin-more'),
-              icon: MasiIcon('more_horiz'),
+              icon: const MasiIcon('more_horiz'),
               tooltip: 'Moderator tools',
               color: colors.accent,
               onPressed: () => _openAdminDeleteSheet(ascentId),

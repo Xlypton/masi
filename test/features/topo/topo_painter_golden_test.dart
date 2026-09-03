@@ -275,34 +275,34 @@ void main() {
       'spline paths in distinct colors; an invisible route draws no path',
       () {
         final routes = [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [
+            points: [
               Offset(0.1, 0.1),
               Offset(0.4, 0.5),
               Offset(0.6, 0.3),
               Offset(0.9, 0.8),
             ],
           ),
-          TopoRoute(
+          const TopoRoute(
             id: 2,
             number: 2,
             colorIndex: 1,
-            points: const [
+            points: [
               Offset(0.2, 0.2),
               Offset(0.3, 0.6),
               Offset(0.5, 0.4),
               Offset(0.8, 0.9),
             ],
           ),
-          TopoRoute(
+          const TopoRoute(
             id: 3,
             number: 3,
             colorIndex: 2,
             visible: false,
-            points: const [
+            points: [
               Offset(0.1, 0.9),
               Offset(0.4, 0.6),
               Offset(0.6, 0.2),
@@ -329,24 +329,24 @@ void main() {
 
     test('A2: each visible route draws its number label', () {
       final routes = [
-        TopoRoute(
+        const TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.4, 0.5), Offset(0.9, 0.8)],
+          points: [Offset(0.1, 0.1), Offset(0.4, 0.5), Offset(0.9, 0.8)],
         ),
-        TopoRoute(
+        const TopoRoute(
           id: 2,
           number: 2,
           colorIndex: 1,
-          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          points: [Offset(0.2, 0.8), Offset(0.7, 0.2)],
         ),
-        TopoRoute(
+        const TopoRoute(
           id: 3,
           number: 3,
           colorIndex: 2,
           visible: false,
-          points: const [Offset(0.1, 0.9), Offset(0.4, 0.6)],
+          points: [Offset(0.1, 0.9), Offset(0.4, 0.6)],
         ),
       ];
       final painter = buildPainter(routes: routes);
@@ -371,12 +371,12 @@ void main() {
       'this and the tests below now pass selectedRouteId matching the '
       'route under test)',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
             TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
@@ -430,12 +430,12 @@ void main() {
       'every other hand-drawn glyph (bolt: 2 lines/no circle; '
       'anchor: 1 filled circle/no line; top: a path)',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.5, 0.5)),
           ],
         );
@@ -476,11 +476,11 @@ void main() {
       'strokeWidth than when selectedRouteId is null',
       () {
         final routes = [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [
+            points: [
               Offset(0.1, 0.1),
               Offset(0.4, 0.5),
               Offset(0.6, 0.3),
@@ -511,16 +511,16 @@ void main() {
       'line/label still DO -- selectedRouteId null means no committed '
       'route\'s symbols paint at all',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.9, 0.8),
           ],
-          symbols: const [
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
           ],
@@ -548,16 +548,16 @@ void main() {
       'toggling selectedRouteId from null to the route\'s id is the only '
       'difference between the previous test and this one',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.9, 0.8),
           ],
-          symbols: const [
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
           ],
@@ -585,21 +585,21 @@ void main() {
       'route\'s symbols -- the other route\'s line still renders but its '
       'symbols do not',
       () {
-        final selected = TopoRoute(
+        const selected = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
           ],
         );
-        final other = TopoRoute(
+        const other = TopoRoute(
           id: 2,
           number: 2,
           colorIndex: 1,
-          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
-          symbols: const [
+          points: [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          symbols: [
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.4, 0.4)),
           ],
         );
@@ -637,21 +637,21 @@ void main() {
       'route\'s own (independent) symbols list',
       () {
         const holdPosition = Offset(0.5, 0.5);
-        final routeAWithDisabledHold = TopoRoute(
+        const routeAWithDisabledHold = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.disabledHold, position: holdPosition),
           ],
         );
-        final routeBUnaffected = TopoRoute(
+        const routeBUnaffected = TopoRoute(
           id: 2,
           number: 2,
           colorIndex: 1,
-          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
-          symbols: const [],
+          points: [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          symbols: [],
         );
 
         expect(routeAWithDisabledHold.symbols, isNotEmpty);
@@ -692,11 +692,11 @@ void main() {
       'palette[colorIndex % palette.length])',
       () {
         final routes = [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [
+            points: [
               Offset(0.1, 0.1),
               Offset(0.4, 0.5),
               Offset(0.9, 0.8),
@@ -733,12 +733,12 @@ void main() {
       'and skips the old hand-drawn geometry for that type entirely',
       () {
         final pic = dummyPicture();
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
           ],
         );
@@ -776,19 +776,19 @@ void main() {
       'glyph load completes) falls back to the pre-existing hand-drawn '
       'geometry -- never a blank marker',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
+          points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
           ],
         );
-        final painter = TopoPainter(
+        const painter = TopoPainter(
           imageSize: imageSize,
           routes: [route],
-          currentPoints: const [],
+          currentPoints: [],
           showHandles: false,
           selectedRouteId: 1,
           palette: palette,
@@ -882,16 +882,16 @@ void main() {
       'route/label/selection/handle rendering)',
       () {
         final pic = dummyPicture();
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.9, 0.8),
           ],
-          symbols: const [
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
             TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.9, 0.8)),
           ],
@@ -1003,10 +1003,10 @@ void main() {
     test('returns false when everything is identical', () {
       final a = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
           ),
         ],
         currentPoints: const [Offset(0.5, 0.5)],
@@ -1014,10 +1014,10 @@ void main() {
       );
       final b = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
           ),
         ],
         currentPoints: const [Offset(0.5, 0.5)],
@@ -1030,10 +1030,10 @@ void main() {
     test('returns true when routes differ', () {
       final a = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
           ),
         ],
       );
@@ -1045,20 +1045,20 @@ void main() {
     test('returns true when a route symbol list differs', () {
       final a = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
-            symbols: const [TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1))],
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            symbols: [TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1))],
           ),
         ],
       );
       final b = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
-            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
           ),
         ],
       );
@@ -1079,19 +1079,19 @@ void main() {
       () {
         final a = buildPainter(
           routes: [
-            TopoRoute(
+            const TopoRoute(
               id: 1,
               number: 1,
-              points: const [Offset(0.1, 0.1), Offset(0.2, 0.2), Offset(0.3, 0.1)],
+              points: [Offset(0.1, 0.1), Offset(0.2, 0.2), Offset(0.3, 0.1)],
             ),
           ],
         );
         final b = buildPainter(
           routes: [
-            TopoRoute(
+            const TopoRoute(
               id: 1,
               number: 1,
-              points: const [Offset(0.1, 0.1), Offset(0.25, 0.2), Offset(0.3, 0.1)],
+              points: [Offset(0.1, 0.1), Offset(0.25, 0.2), Offset(0.3, 0.1)],
             ),
           ],
         );
@@ -1300,12 +1300,12 @@ void main() {
         'A3c: symbol glyph radius doubles in scene space at scale 0.5 '
         '(base _symbolRadius 11.0 -> 22.0), via the anchor glyph\'s circle',
         () {
-          TopoRoute routeWithAnchor() => TopoRoute(
+          TopoRoute routeWithAnchor() => const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-            symbols: const [
+            points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+            symbols: [
               TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
             ],
           );
@@ -1340,7 +1340,7 @@ void main() {
         'POSITION (not just the font) is scaled by 1/scale like every '
         'other on-screen-constant size',
         () {
-          TopoRoute routeWithLabel() => TopoRoute(
+          TopoRoute routeWithLabel() => const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
@@ -1350,7 +1350,7 @@ void main() {
             // added by the label-clipping fix — this test is specifically
             // about the unclamped scaling behavior; A3h below covers
             // clamping near an edge.
-            points: const [Offset(0.3, 0.3), Offset(0.7, 0.6)],
+            points: [Offset(0.3, 0.3), Offset(0.7, 0.6)],
           );
           // percent (0.3, 0.3) -> (0.7, 0.6) in a 400x300 image -> scene
           // (120, 90) -> (280, 180).
@@ -1416,11 +1416,11 @@ void main() {
         'A3f (#18): a single-point route (no segment to be perpendicular '
         'to) falls back to the pre-existing up-and-left placement',
         () {
-          final route = TopoRoute(
+          const route = TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [Offset(0.5, 0.5)],
+            points: [Offset(0.5, 0.5)],
           );
           final canvas = _RecordingCanvas();
 
@@ -1441,11 +1441,11 @@ void main() {
         'A3g (#18): the route number is painted with NO background chip — '
         'only the number (with a subtle text shadow for legibility)',
         () {
-          final route = TopoRoute(
+          const route = TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+            points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
           );
           final canvas = _RecordingCanvas();
 
@@ -1482,11 +1482,11 @@ void main() {
           // Single-point route pinned to the top-left corner: unclamped,
           // the fallback up-and-left offset direction would place the
           // label origin at negative x/y (off-frame).
-          final route = TopoRoute(
+          const route = TopoRoute(
             id: 1,
             number: 9,
             colorIndex: 0,
-            points: const [Offset(0.0, 0.0)],
+            points: [Offset(0.0, 0.0)],
           );
           final canvas = _RecordingCanvas();
 
@@ -1524,11 +1524,11 @@ void main() {
         'paragraph is measurably wider at scale 0.5 (fontSize 28.0) than '
         'at scale 1.0 (fontSize 14.0) for the same text',
         () {
-          TopoRoute routeWithLabel() => TopoRoute(
+          TopoRoute routeWithLabel() => const TopoRoute(
             id: 1,
             number: 8,
             colorIndex: 0,
-            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+            points: [Offset(0.1, 0.1), Offset(0.9, 0.8)],
           );
 
           double? widthAt(double scale) {
@@ -1613,19 +1613,19 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
 
-        final painter = TopoPainter(
-          imageSize: const Size(400, 300),
+        const painter = TopoPainter(
+          imageSize: Size(400, 300),
           routes: [
             TopoRoute(
               id: 1,
               number: 1,
               colorIndex: 0,
-              points: const [
+              points: [
                 Offset(0.1, 0.1),
                 Offset(0.4, 0.5),
                 Offset(0.9, 0.8),
               ],
-              symbols: const [
+              symbols: [
                 TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
                 TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
               ],
@@ -1634,26 +1634,26 @@ void main() {
               id: 2,
               number: 2,
               colorIndex: 1,
-              points: const [
+              points: [
                 Offset(0.2, 0.8),
                 Offset(0.7, 0.2),
               ],
             ),
           ],
-          currentPoints: const [],
+          currentPoints: [],
           showHandles: false,
           selectedRouteId: 1,
           palette: palette,
         );
 
         await tester.pumpWidget(
-          Directionality(
+          const Directionality(
             textDirection: TextDirection.ltr,
             child: RepaintBoundary(
               child: SizedBox(
                 width: 400,
                 height: 300,
-                child: CustomPaint(painter: painter, size: const Size(400, 300)),
+                child: CustomPaint(painter: painter, size: Size(400, 300)),
               ),
             ),
           ),
@@ -1682,17 +1682,17 @@ void main() {
     final canvas = Canvas(recorder);
     final painter = buildPainter(
       routes: [
-        TopoRoute(
+        const TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.6, 0.3),
             Offset(0.9, 0.8),
           ],
-          symbols: const [
+          symbols: [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.3, 0.4)),
             TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),

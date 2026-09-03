@@ -117,7 +117,7 @@ class FakeAuthRepository implements AuthRepository {
 
 const _signedOut = AuthSessionState.signedOut();
 const _uidA = 'user-aaa';
-final _signedInA = AuthSessionState.signedIn('a@example.com', uid: _uidA);
+const _signedInA = AuthSessionState.signedIn('a@example.com', uid: _uidA);
 
 void main() {
   late Directory tmp;
@@ -280,7 +280,7 @@ void main() {
         expect(remote.backupsTable.containsKey(_uidA), isTrue);
         expect(remote.backupsTable[_uidA]!.snapshot, expectedSnapshot);
 
-        final expectedPath = '$_uidA/photo-original.jpg';
+        const expectedPath = '$_uidA/photo-original.jpg';
         expect(remote.storage.containsKey(expectedPath), isTrue);
         expect(remote.storage[expectedPath], List<int>.filled(16, 7));
         // Only ONE object was written, not two (de-duped by localPath).
@@ -471,7 +471,7 @@ void main() {
 
           expect(result.didPush, isTrue);
           expect(result.photosUploaded, 1);
-          final expectedPath = '$_uidA/photo-rel.jpg';
+          const expectedPath = '$_uidA/photo-rel.jpg';
           expect(remote.storage.containsKey(expectedPath), isTrue);
           expect(remote.storage[expectedPath], List<int>.filled(16, 3));
         },

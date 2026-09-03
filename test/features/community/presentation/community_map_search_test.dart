@@ -206,7 +206,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           container,
-          CommunityMapScreen(),
+          const CommunityMapScreen(),
         ),
       );
       await _drain(tester);
@@ -230,7 +230,7 @@ void main() {
       'a settled query shows local content (topo/sector/area) ranked above '
       'places, and calls the geocoding service exactly once for it',
       (tester) async {
-        final places = const [
+        const places = [
           PlaceResult(
             displayName: 'Sunnyvale, California',
             latitude: 37.36,
@@ -258,7 +258,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -339,7 +339,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -396,7 +396,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -448,7 +448,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -491,7 +491,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(),
+              const CommunityMapScreen(),
             ),
           );
           await _drain(tester);
@@ -743,7 +743,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);
@@ -792,7 +792,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(),
+            const CommunityMapScreen(),
           ),
         );
         await _drain(tester);

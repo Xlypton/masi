@@ -11,7 +11,7 @@ void main() {
   group('ArState', () {
     test('copyWith overrides only the given fields', () {
       const initial = ArState(mode: ArMode.auto, active: false);
-      final alignment = ArAlignment(
+      const alignment = ArAlignment(
         confidence: 0.5,
         tracking: true,
       );
@@ -28,12 +28,12 @@ void main() {
     });
 
     test('equality/hashCode are value-based', () {
-      final alignment = ArAlignment(
+      const alignment = ArAlignment(
         confidence: 0.5,
         tracking: true,
       );
-      final a = ArState(mode: ArMode.auto, latest: alignment, active: true);
-      final b = ArState(mode: ArMode.auto, latest: alignment, active: true);
+      const a = ArState(mode: ArMode.auto, latest: alignment, active: true);
+      const b = ArState(mode: ArMode.auto, latest: alignment, active: true);
       const c = ArState(mode: ArMode.manual, active: true);
 
       expect(a, b);

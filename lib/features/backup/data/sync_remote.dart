@@ -1181,7 +1181,7 @@ class SupabaseSyncRemote implements SyncRemote {
     // is load-bearing (`BackupRepository.importSnapshot` applies tables in the
     // order it iterates them), so the map is rebuilt by walking `tableNames`
     // in order after the wait — never by completion order.
-    final tableNames = syncTableNames;
+    const tableNames = syncTableNames;
     final fetched = await Future.wait(<Future<List<Map<String, dynamic>>>>[
       for (final tableName in tableNames)
         _client.from(tableName).select().eq('ownerId', uid),

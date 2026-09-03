@@ -369,7 +369,7 @@ class RouteLegend extends ConsumerWidget {
                       minWidth: 44,
                       minHeight: 44,
                     ),
-                    icon: MasiIcon('more_horiz'),
+                    icon: const MasiIcon('more_horiz'),
                     onPressed: () => _showRouteActions(
                       context,
                       route: route,

@@ -154,7 +154,7 @@ void main() {
       (tester) async {
         await tester.pumpWidget(
           _wrap(
-            MasiAvatar(
+            const MasiAvatar(
               avatarUrl: 'data:image/png;base64,$_tinyPngBase64',
               email: 'peter.keri@example.com',
               radius: 24,

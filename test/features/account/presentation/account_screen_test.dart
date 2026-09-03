@@ -1851,7 +1851,7 @@ void main() {
       'opfsLocks backend plus the stall reason — reading measuredBackend, '
       'never backend (340ba7b regression guard)',
       (tester) async {
-        final measured = const StorageDurability(
+        const measured = StorageDurability(
           backend: StorageBackend.opfsLocks,
           missingFeatures: {
             StorageMissingFeature.dedicatedWorkersInSharedWorkers,
@@ -2482,7 +2482,7 @@ void main() {
       'one-line clipboard guarantee',
       () {
         final line = diagnosticsClipboardLine(
-          StorageDurability.unavailable(
+          const StorageDurability.unavailable(
             'probe threw\nSomeException: no "workers"\n  at frame\ttwo',
           ),
           const StoragePersistenceStatus(),
@@ -2505,7 +2505,7 @@ void main() {
       'exactly one line',
       () {
         final line = diagnosticsClipboardLine(
-          StorageDurability.unavailable('reason\nwith a newline'),
+          const StorageDurability.unavailable('reason\nwith a newline'),
           fullPersistence,
           sync: const SyncOrchestratorState(
             status: SyncStatus.error,

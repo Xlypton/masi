@@ -132,11 +132,11 @@ void main() {
       'warped screen points equal percent*refSize (same scene positions '
       'TopoPainter would use)',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.6, 0.3),
@@ -167,10 +167,10 @@ void main() {
     );
 
     test('a 2-point route draws a straight line at the scaled percents', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
       final painter = buildPainter(routes: [route]);
       final canvas = _RecordingCanvas();
@@ -183,10 +183,10 @@ void main() {
     });
 
     test('a 1-point route draws a dot at the scaled percent', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0.5, 0.5)],
+        points: [Offset(0.5, 0.5)],
       );
       final painter = buildPainter(routes: [route]);
       final canvas = _RecordingCanvas();
@@ -202,10 +202,10 @@ void main() {
     test('every drawn point is shifted by (dx, dy) vs identity', () {
       const dx = 25.0;
       const dy = -13.0;
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
 
       final identityCanvas = _RecordingCanvas();
@@ -247,11 +247,11 @@ void main() {
       'confidence 0.2 (< kLowConfidenceThreshold) produces a visibly '
       'different (lower-alpha) stroke than confidence 1.0',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
         );
 
         final highConfidenceCanvas = _RecordingCanvas();
@@ -285,11 +285,11 @@ void main() {
       'confidence exactly at kLowConfidenceThreshold is NOT low-confidence '
       '(boundary is a strict <)',
       () {
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
         );
 
         final atThresholdCanvas = _RecordingCanvas();
@@ -305,10 +305,10 @@ void main() {
 
   group('outline (ghost reference image)', () {
     test('outline: null (default) draws no image; existing behavior unaffected', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
       final painter = buildPainter(routes: [route]); // outline defaults to null.
       final canvas = _RecordingCanvas();
@@ -330,10 +330,10 @@ void main() {
       () async {
         final image = await _createTinyImage();
         final homography = Homography.translation(20, 10);
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
         );
 
         final painter = ArOverlayPainter(
@@ -383,10 +383,10 @@ void main() {
 
   group('rockBox (route-derived rock-box highlight)', () {
     test('rockBox: null (default) draws no highlight path', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
-        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
       final painter = buildPainter(routes: [route]); // rockBox defaults null.
       final canvas = _RecordingCanvas();
@@ -402,10 +402,10 @@ void main() {
       'homography, as a filled+stroked highlight, before route polylines',
       () {
         final homography = Homography.translation(20, 10);
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
-          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          points: [Offset(0.0, 0.0), Offset(1.0, 1.0)],
         );
         const box = Rect.fromLTRB(0.2, 0.3, 0.8, 0.7);
 
@@ -473,7 +473,7 @@ void main() {
   group('A5: shouldRepaint', () {
     test('returns false when everything is identical', () {
       final routes = [
-        TopoRoute(id: 1, number: 1, points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)]),
+        const TopoRoute(id: 1, number: 1, points: [Offset(0.1, 0.1), Offset(0.2, 0.2)]),
       ];
       final a = buildPainter(routes: routes);
       final b = buildPainter(routes: routes);
@@ -483,7 +483,7 @@ void main() {
 
     test('returns true when routes differ', () {
       final a = buildPainter(
-        routes: [TopoRoute(id: 1, number: 1, points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)])],
+        routes: [const TopoRoute(id: 1, number: 1, points: [Offset(0.1, 0.1), Offset(0.2, 0.2)])],
       );
       final b = buildPainter(routes: const []);
 
@@ -616,11 +616,11 @@ void main() {
     });
 
     test('an invisible route draws nothing and does not crash', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
         visible: false,
-        points: const [
+        points: [
           Offset(0.1, 0.1),
           Offset(0.4, 0.5),
           Offset(0.9, 0.8),
@@ -641,11 +641,11 @@ void main() {
       final canvas = Canvas(recorder);
       final painter = buildPainter(
         routes: [
-          TopoRoute(
+          const TopoRoute(
             id: 1,
             number: 1,
             colorIndex: 0,
-            points: const [
+            points: [
               Offset(0.1, 0.1),
               Offset(0.4, 0.5),
               Offset(0.6, 0.3),
@@ -665,11 +665,11 @@ void main() {
 
   group('empty palette defensive', () {
     test('painting a route with an empty palette does not throw', () {
-      final route = TopoRoute(
+      const route = TopoRoute(
         id: 1,
         number: 1,
         colorIndex: 0,
-        points: const [Offset(0.1, 0.1), Offset(0.4, 0.5), Offset(0.9, 0.8)],
+        points: [Offset(0.1, 0.1), Offset(0.4, 0.5), Offset(0.9, 0.8)],
       );
       final painter = buildPainter(routes: [route], palette: const []);
       final canvas = _RecordingCanvas();
@@ -701,11 +701,11 @@ void main() {
         ]);
         final homography = Homography.translation(20, 10).multiply(scale);
 
-        final route = TopoRoute(
+        const route = TopoRoute(
           id: 1,
           number: 1,
           colorIndex: 0,
-          points: const [
+          points: [
             Offset(0.1, 0.1),
             Offset(0.4, 0.5),
             Offset(0.6, 0.3),

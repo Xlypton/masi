@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
 void main() {
-  final locatedTopo = TopoRef(
+  const locatedTopo = TopoRef(
     wallId: 'wall-1',
     name: 'Sunny Boulder',
     thumbnailPath: null,
@@ -19,7 +19,7 @@ void main() {
     latitude: 49.0,
     longitude: -123.0,
   );
-  final unlocatedTopo = TopoRef(
+  const unlocatedTopo = TopoRef(
     wallId: 'wall-2',
     name: 'No Coords Boulder',
     thumbnailPath: null,

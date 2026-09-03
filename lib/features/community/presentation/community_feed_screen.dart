@@ -217,17 +217,17 @@ class _FeedSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return const Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             MasiSpacing.lg,
             0,
             MasiSpacing.lg,
             MasiSpacing.sm,
           ),
           child: Row(
-            children: const [
+            children: [
               Expanded(
                 child: MasiSkeleton.box(
                   key: Key('community-feed-skeleton-search'),
@@ -245,7 +245,7 @@ class _FeedSkeleton extends StatelessWidget {
             ],
           ),
         ),
-        const Expanded(child: MasiSkeletonList.feedCards()),
+        Expanded(child: MasiSkeletonList.feedCards()),
       ],
     );
   }

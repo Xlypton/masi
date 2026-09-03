@@ -13,7 +13,7 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
     await binding.takeScreenshot('01-topos-home');
 
-    final organizeKey = const Key('topos-organize');
+    const organizeKey = Key('topos-organize');
     final organizeFinder = find.byKey(organizeKey);
     if (tester.any(organizeFinder)) {
       await tester.tap(organizeFinder);
@@ -21,7 +21,7 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
     await binding.takeScreenshot('02-areas');
 
-    final fabKey = const Key('area-add-fab');
+    const fabKey = Key('area-add-fab');
     final fabFinder = find.byKey(fabKey);
     if (tester.any(fabFinder)) {
       await tester.tap(fabFinder);

@@ -42,7 +42,7 @@ void main() {
       'a blocked in-memory browser backend offers nothing: re-opening yields '
       'the same backend every time',
       () {
-        final durability = const StorageDurability(
+        const durability = StorageDurability(
           backend: StorageBackend.inMemory,
         );
         expect(
