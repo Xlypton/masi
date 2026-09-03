@@ -450,6 +450,30 @@ class FailingUploadSyncRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant that fails the byte upload of exactly the named
+/// photos. [FailingUploadSyncRemote] fails ALL of them, which cannot express
+/// the case that matters for `route_lines`: ONE bad photo in a wall whose
+/// other photo is perfectly healthy, so the test can tell "withheld the right
+/// row" apart from "withheld everything".
+class SelectiveFailingUploadSyncRemote extends FakeSyncRemote {
+  SelectiveFailingUploadSyncRemote(this.failPhotoIds);
+
+  final Set<String> failPhotoIds;
+
+  @override
+  Future<void> uploadPhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+    required List<int> bytes,
+  }) async {
+    if (failPhotoIds.contains(photoId)) {
+      throw Exception('uploadPhoto failed: simulated storage error ($photoId)');
+    }
+    await super.uploadPhoto(uid: uid, photoId: photoId, ext: ext, bytes: bytes);
+  }
+}
+
 /// [FakeSyncRemote] variant whose "already uploaded" LISTING throws — the
 /// shape a Storage outage (or simply being offline) produces, since
 /// `SupabaseSyncRemote._listAllObjects` -> `collectPagedObjects` ->
@@ -829,6 +853,183 @@ void main() {
       ),
     );
   }
+
+  // `route_lines` — the same climb drawn on a SECOND photo — was pulled,
+  // exported and rendered locally but NEVER pushed: `pushOwn`'s
+  // `tablesToRows` had no key for it, and `upsertOwnRows` skips a missing key
+  // with a bare `continue`. No error, no log, no failed-table outcome. The
+  // helper's own unit tests cannot catch a regression of that shape, because
+  // the bug was the absence of the call site rather than a fault inside it —
+  // which is why this test drives the whole push and reads the remote back.
+  group('pushOwn — route_lines', () {
+    Future<void> seedSecondLine(
+      AppDatabase db, {
+      required String ownerId,
+      required String wallId,
+      required String routeId,
+      required String photoId,
+      required String lineId,
+      String localPath = '/tmp/placeholder-2.jpg',
+    }) async {
+      await db.into(db.photos).insert(
+        PhotosCompanion.insert(
+          id: photoId,
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: Value(ownerId),
+          wallId: wallId,
+          localPath: localPath,
+          kind: 'original',
+          width: 800,
+          height: 600,
+        ),
+      );
+      await db.into(db.routeLines).insert(
+        RouteLinesCompanion.insert(
+          id: lineId,
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: Value(ownerId),
+          routeId: routeId,
+          photoId: photoId,
+          pointsJson: '[{"x":0.3,"y":0.8}]',
+          symbolsJson: '[]',
+        ),
+      );
+    }
+
+    test('a line drawn on a second photo reaches the remote', () async {
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      final file2 = writeFile(c.srcDir, 'wall-2.jpg', 9);
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        localPath: file.path,
+      );
+      await seedSecondLine(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        routeId: 'route-1',
+        photoId: 'photo-2',
+        lineId: 'line-1',
+        localPath: file2.path,
+      );
+
+      final result = await c.service.pushOwn();
+      expect(result.didPush, isTrue);
+
+      final ownRows = await remote.fetchOwnRows(_uidU1);
+      expect(
+        ownRows['route_lines']?.map((r) => r['id']),
+        ['line-1'],
+        reason: 'the geometry of a climb drawn on a second photo is the '
+            'user\'s work like any other row — before this, it lived only on '
+            'the device that drew it and was lost on reinstall',
+      );
+      expect(
+        ownRows['route_lines']!.single['pointsJson'],
+        '[{"x":0.3,"y":0.8}]',
+        reason: 'the points themselves must survive the trip, not just the id',
+      );
+
+      final line = await (c.db.select(
+        c.db.routeLines,
+      )..where((t) => t.id.equals('line-1'))).getSingle();
+      expect(
+        line.dirty,
+        isFalse,
+        reason: '`_clearDirty` has a branch per table and had none for '
+            'route_lines. Without it the row lands but stays dirty forever, '
+            'so every PushScope.dirtyOnly push re-sends every line the user '
+            'has ever drawn — idempotent, so it would never fail loudly, and '
+            'it would quietly make `dirty` meaningless for this one table.',
+      );
+    });
+
+    test('a line is withheld when the push holds back the photo it is drawn '
+        'on, and reports why', () async {
+      final remote = SelectiveFailingUploadSyncRemote({'photo-2'});
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      final file2 = writeFile(c.srcDir, 'wall-2.jpg', 9);
+      final file3 = writeFile(c.srcDir, 'wall-3.jpg', 11);
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        localPath: file.path,
+      );
+      await seedSecondLine(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        routeId: 'route-1',
+        photoId: 'photo-2',
+        lineId: 'line-1',
+        localPath: file2.path,
+      );
+      // A THIRD photo whose bytes upload fine, carrying its own line. Without
+      // it this test cannot tell "withheld the right row" from "pushed
+      // nothing at all" — an empty `route_lines` is exactly what the original
+      // missing-key bug produced, so the assertion below would pass against
+      // the very defect it exists to catch.
+      await seedSecondLine(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        routeId: 'route-1',
+        photoId: 'photo-3',
+        lineId: 'line-healthy',
+        localPath: file3.path,
+      );
+
+      final result = await c.service.pushOwn();
+
+      final ownRows = await remote.fetchOwnRows(_uidU1);
+      expect(
+        ownRows['route_lines']!.map((r) => r['id']),
+        ['line-healthy'],
+        reason: 'photo-2 never landed, so a line drawn on it would be an '
+            'orphan — and `public.route_lines` has NO foreign keys, so the '
+            'server would accept it and the failure would surface only on '
+            'whichever device pulls it next. The line on the healthy photo '
+            'goes up in the same push: one bad photo withholds one line.',
+      );
+      expect(
+        ownRows['routes']!.map((r) => r['id']),
+        ['route-1'],
+        reason: 'route-1 points at photo-1, which landed fine — one bad '
+            'photo must not withhold the whole wall',
+      );
+      expect(
+        result.errors.join(' '),
+        contains('line-1'),
+        reason: 'withheld is REPORTED, never silently dropped (the L5 lesson)',
+      );
+    });
+  });
 
   group('pushOwn', () {
     test(
