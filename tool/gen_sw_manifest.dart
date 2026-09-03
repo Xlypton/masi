@@ -73,16 +73,41 @@ class ShellManifest {
 /// that instantiates it.
 const wasmRendererArtifacts = <String>['main.dart.wasm', 'main.dart.mjs'];
 
-/// The dart2js renderer bundle. A `--wasm` build emits this TOO, as the
-/// fallback for browsers Flutter's loader will not hand WasmGC — which is all
-/// of WebKit, i.e. every browser on iOS.
+/// The dart2js renderer bundle's ENTRYPOINT. A `--wasm` build emits this TOO,
+/// as the fallback for browsers Flutter's loader will not hand WasmGC — which
+/// is all of WebKit, i.e. every browser on iOS.
+///
+/// Deferred part files are matched separately by [isJsDeferredPart], not
+/// listed here: their names are decided by dart2js and change with the
+/// deferred-import graph, so an exact-name list cannot see them.
 const jsRendererArtifacts = <String>['main.dart.js'];
+
+/// Whether [relativePath] is a dart2js DEFERRED PART file — the chunks emitted
+/// for each `deferred as` import (`main.dart.js_1.part.js` and friends).
+///
+/// These belong to the dart2js bundle exactly as much as `main.dart.js` does,
+/// and the classification matters in a way that is easy to get backwards.
+/// Renderer artifacts are excluded from the ATOMIC precache and fetched
+/// best-effort per client instead (see [isPrecacheExcluded]). A part file that
+/// is NOT recognised as one therefore falls through to the ordinary app-asset
+/// branch and is precached ATOMICALLY, FOR EVERY CLIENT — including every
+/// blink client, which runs dart2wasm and will never load a single byte of it.
+/// That would hand the whole point of deferring these features back: a smaller
+/// initial download for iOS, paid for by an install-time download of the same
+/// code for everyone else, inside the one add that must not fail.
+///
+/// dart2wasm emits no part files at all, because Flutter's `build web` never
+/// passes it `--enable-deferred-loading` — so this predicate is about the
+/// dart2js half of a `--wasm` build, and matches nothing in a wasm-only one.
+bool isJsDeferredPart(String relativePath) =>
+    RegExp(r'^main\.dart\.js_[0-9]+\.part\.js$').hasMatch(relativePath);
 
 /// Whether [relativePath] is part of a renderer bundle — an artifact only ONE
 /// kind of browser can execute.
 bool isRendererArtifact(String relativePath) =>
     wasmRendererArtifacts.contains(relativePath) ||
-    jsRendererArtifacts.contains(relativePath);
+    jsRendererArtifacts.contains(relativePath) ||
+    isJsDeferredPart(relativePath);
 
 /// Files that must never enter the precache.
 bool isPrecacheExcluded(String relativePath) {
@@ -176,7 +201,10 @@ ShellManifest buildShellManifest(Directory buildDir) {
       wasmRendererBytes += entity.lengthSync();
       continue;
     }
-    if (jsRendererArtifacts.contains(relative)) {
+    // `main.dart.js` AND its deferred part files — see [isJsDeferredPart] for
+    // why a part file that misses this branch is worse than one that is never
+    // emitted at all.
+    if (jsRendererArtifacts.contains(relative) || isJsDeferredPart(relative)) {
       jsRenderer.add(relative);
       jsRendererBytes += entity.lengthSync();
       continue;
