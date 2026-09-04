@@ -8,6 +8,7 @@ import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../data/rock_scan_remote.dart';
 import '../data/rock_scan_repository.dart';
+import '../domain/point_cloud.dart';
 import '../domain/rock_scan_status.dart';
 
 /// The [RockScanRepository], wired to the shared database and clock exactly
@@ -62,6 +63,25 @@ final rockScanCloudBytesProvider = FutureProvider.autoDispose
       final objectPath = scan?.cloudObjectPath;
       if (objectPath == null || objectPath.isEmpty) return null;
       return ref.watch(rockScanRemoteProvider).downloadCloud(objectPath);
+    });
+
+/// The scan's point cloud, parsed and ready to draw, or `null` when there is
+/// nothing to draw yet.
+///
+/// Parsing is separated from downloading so the bytes are fetched once and
+/// decoded once. Both are `autoDispose`: a cloud is megabytes of typed arrays
+/// and there is no reason to keep one resident after the viewer closes.
+///
+/// A cloud whose bytes are present but unparseable resolves to `null`, not an
+/// error — `PointCloud.tryParseBinaryPly` never throws, by contract, because
+/// a malformed file must not be able to take a climber's screen down.
+final rockScanPointCloudProvider = FutureProvider.autoDispose
+    .family<PointCloud?, String>((ref, scanId) async {
+      final bytes = await ref.watch(
+        rockScanCloudBytesProvider(scanId).future,
+      );
+      if (bytes == null || bytes.isEmpty) return null;
+      return PointCloud.tryParseBinaryPly(bytes);
     });
 
 /// What the capture flow is currently doing. One at a time, deliberately:
