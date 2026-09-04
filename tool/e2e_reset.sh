@@ -83,10 +83,10 @@ DELETE FROM public.routes          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN
 DELETE FROM public.photos          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 -- rock_scans before walls: it points at wallId and, like route_lines,
 -- carries no server-side FK, so a surviving row would be an invisible
--- orphan rather than a loud constraint violation. No suite captures a
--- scan yet, but the sweep predates that for the same reason
--- route_lines' did: the table that gets forgotten is always the one
--- nothing happened to be writing to at the time.
+-- orphan rather than a loud constraint violation. `tool/rock_scan_e2e.sh`
+-- now writes here for real, against the live worker; the sweep predated
+-- that, for the same reason route_lines' did — the table that gets
+-- forgotten is always the one nothing happened to be writing to yet.
 DELETE FROM public.rock_scans      WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.wall_moderation WHERE \"wallId\"  IN ($E2E_WALLS);
 DELETE FROM public.walls           WHERE \"ownerId\" IN ($UIDS);
@@ -118,16 +118,39 @@ if [[ -n "$SERVICE_KEY" && "$SERVICE_KEY" != "null" ]]; then
   # Scan videos and reconstructions live in their OWN bucket, and every object
   # in it sits under an owner-uid prefix — there is no shared/ equivalent, so
   # the three owner prefixes are the whole of it.
+  # One listing level is NOT enough here, and the difference is invisible
+  # until you look in the bucket months later. A scan's SOURCE VIDEO is flat
+  # (`<uid>/<scanId>.mp4`) but its RECONSTRUCTION is nested
+  # (`<uid>/<scanId>/cloud.ply`), and Supabase's list returns a nested path as
+  # a pseudo-folder entry: same shape, but `id` is null. The old filter kept
+  # those, so teardown asked to delete `<uid>/<scanId>` — which is not an
+  # object, so the delete quietly did nothing and the PLY stayed forever.
+  # Nothing caught it: the survivor check counts DATABASE rows, and the rows
+  # really were gone.
+  #
+  # So: entries with a non-null `id` are objects; entries without are folders
+  # to descend into. Depth is bounded at one because that is the whole of the
+  # layout the worker writes — a deeper tree would leak again, which is why
+  # this says so out loud rather than looking generic.
+  list_scan_prefix() {
+    curl -sS -X POST "${SUPABASE_URL}/storage/v1/object/list/rock-scans" \
+      -H "Authorization: Bearer ${SERVICE_KEY}" -H "Content-Type: application/json" \
+      --data "$(jq -n --arg p "$1" '{prefix:$p, limit:1000, offset:0}')"
+  }
   SCAN_DELETE=()
   for u in "$E2E_OWNER_UID" "$E2E_READER_UID" "$E2E_ADMIN_UID"; do
+    top="$(list_scan_prefix "$u")"
     while IFS= read -r obj; do
       [[ -n "$obj" ]] && SCAN_DELETE+=("$obj")
-    done < <(
-      curl -sS -X POST "${SUPABASE_URL}/storage/v1/object/list/rock-scans" \
-        -H "Authorization: Bearer ${SERVICE_KEY}" -H "Content-Type: application/json" \
-        --data "$(jq -n --arg p "$u" '{prefix:$p, limit:1000, offset:0}')" \
-        | jq -r --arg p "$u" '.[]? | select(.name != null) | "\($p)/\(.name)"'
-    )
+    done < <(echo "$top" | jq -r --arg p "$u" \
+      '.[]? | select(.name != null and .id != null) | "\($p)/\(.name)"')
+    while IFS= read -r folder; do
+      [[ -n "$folder" ]] || continue
+      while IFS= read -r obj; do
+        [[ -n "$obj" ]] && SCAN_DELETE+=("$obj")
+      done < <(list_scan_prefix "$u/$folder" | jq -r --arg p "$u/$folder" \
+        '.[]? | select(.name != null and .id != null) | "\($p)/\(.name)"')
+    done < <(echo "$top" | jq -r '.[]? | select(.name != null and .id == null) | .name')
   done
   if [[ ${#SCAN_DELETE[@]} -gt 0 ]]; then
     SCAN_REMOVED="$(curl -sS -X DELETE "${SUPABASE_URL}/storage/v1/object/rock-scans" \
