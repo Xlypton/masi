@@ -621,6 +621,7 @@ class SyncService {
     // snapshot, and in the remote schema with its own RLS) — it was simply
     // missing from `tablesToRows` below, so it was pulled and never pushed.
     late List<db.RouteLine> routeLines;
+    late List<db.RockScanRow> rockScans;
     late List<db.Comment> comments;
     late List<db.Like> likes;
     late List<db.Ascent> ascents;
@@ -640,6 +641,7 @@ class SyncService {
       photos = await (_db.select(_db.photos)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       routes = await (_db.select(_db.routes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       routeLines = await (_db.select(_db.routeLines)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      rockScans = await (_db.select(_db.rockScans)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       comments = await (_db.select(_db.comments)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       likes = await (_db.select(_db.likes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       ascents = await (_db.select(_db.ascents)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
@@ -723,8 +725,18 @@ class SyncService {
       List<Map<String, dynamic>> jsonRows,
     ) {
       final required = _pushRequiredFields[table] ?? const ['id'];
+      // Drop any column the BACKEND owns for this table before the row is
+      // validated or sent (see [serverOwnedSyncColumns]). Done HERE, rather
+      // than at each `tablesToRows` entry, because every pushed row of every
+      // table already passes through this closure — so a future server-owned
+      // table needs only a map entry, with no second site to remember. That
+      // matters more than it looks: `route_lines` sat at zero rows in
+      // production for months because ONE such site was missed.
+      final pushable = [
+        for (final row in jsonRows) stripServerOwnedSyncColumns(table, row),
+      ];
       final split = partitionSyncRows(
-        jsonRows,
+        pushable,
         required,
         debugLabel: 'local $table (push)',
       );
@@ -840,6 +852,13 @@ class SyncService {
           },
         ),
       ),
+      // The server-owned half of a scan row (`status`, `cloudObjectPath`,
+      // `manifestJson`, …) is NOT stripped here — `guard()` does it centrally
+      // for every table, so this entry looks like any other. See
+      // [serverOwnedSyncColumns] for why those columns must not travel.
+      'rock_scans': guard('rock_scans', [
+        for (final row in rockScans) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
       'comments': guard('comments', [
         for (final row in comments) stripLocalOnlySyncColumns(row.toJson()),
       ]),
@@ -1079,6 +1098,17 @@ class SyncService {
                     t.dirty.equals(true),
               ))
             .write(const db.RouteLinesCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['rock_scans'],
+        (ids, updatedAt) => (_db.update(_db.rockScans)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.RockScansCompanion(dirty: Value(false))),
       );
       await _clearDirtyRows(
         tablesToRows['ascents'],

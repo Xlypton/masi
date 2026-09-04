@@ -5779,6 +5779,1035 @@ class RouteLinesCompanion extends UpdateCompanion<RouteLine> {
   }
 }
 
+class $RockScansTable extends RockScans
+    with TableInfo<$RockScansTable, RockScanRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RockScansTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteIdMeta = const VerificationMeta(
+    'remoteId',
+  );
+  @override
+  late final GeneratedColumn<String> remoteId = GeneratedColumn<String>(
+    'remote_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _dirtyMeta = const VerificationMeta('dirty');
+  @override
+  late final GeneratedColumn<bool> dirty = GeneratedColumn<bool>(
+    'dirty',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dirty" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES walls (id)',
+    ),
+  );
+  static const VerificationMeta _uploadStateMeta = const VerificationMeta(
+    'uploadState',
+  );
+  @override
+  late final GeneratedColumn<String> uploadState = GeneratedColumn<String>(
+    'upload_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _videoObjectPathMeta = const VerificationMeta(
+    'videoObjectPath',
+  );
+  @override
+  late final GeneratedColumn<String> videoObjectPath = GeneratedColumn<String>(
+    'video_object_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _durationMsMeta = const VerificationMeta(
+    'durationMs',
+  );
+  @override
+  late final GeneratedColumn<int> durationMs = GeneratedColumn<int>(
+    'duration_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sizeBytesMeta = const VerificationMeta(
+    'sizeBytes',
+  );
+  @override
+  late final GeneratedColumn<int> sizeBytes = GeneratedColumn<int>(
+    'size_bytes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _progressPctMeta = const VerificationMeta(
+    'progressPct',
+  );
+  @override
+  late final GeneratedColumn<int> progressPct = GeneratedColumn<int>(
+    'progress_pct',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _cloudObjectPathMeta = const VerificationMeta(
+    'cloudObjectPath',
+  );
+  @override
+  late final GeneratedColumn<String> cloudObjectPath = GeneratedColumn<String>(
+    'cloud_object_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _manifestJsonMeta = const VerificationMeta(
+    'manifestJson',
+  );
+  @override
+  late final GeneratedColumn<String> manifestJson = GeneratedColumn<String>(
+    'manifest_json',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _failureReasonMeta = const VerificationMeta(
+    'failureReason',
+  );
+  @override
+  late final GeneratedColumn<String> failureReason = GeneratedColumn<String>(
+    'failure_reason',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+    uploadState,
+    videoObjectPath,
+    durationMs,
+    sizeBytes,
+    status,
+    progressPct,
+    cloudObjectPath,
+    manifestJson,
+    failureReason,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'rock_scans';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<RockScanRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('remote_id')) {
+      context.handle(
+        _remoteIdMeta,
+        remoteId.isAcceptableOrUnknown(data['remote_id']!, _remoteIdMeta),
+      );
+    }
+    if (data.containsKey('dirty')) {
+      context.handle(
+        _dirtyMeta,
+        dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('upload_state')) {
+      context.handle(
+        _uploadStateMeta,
+        uploadState.isAcceptableOrUnknown(
+          data['upload_state']!,
+          _uploadStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('video_object_path')) {
+      context.handle(
+        _videoObjectPathMeta,
+        videoObjectPath.isAcceptableOrUnknown(
+          data['video_object_path']!,
+          _videoObjectPathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('duration_ms')) {
+      context.handle(
+        _durationMsMeta,
+        durationMs.isAcceptableOrUnknown(data['duration_ms']!, _durationMsMeta),
+      );
+    }
+    if (data.containsKey('size_bytes')) {
+      context.handle(
+        _sizeBytesMeta,
+        sizeBytes.isAcceptableOrUnknown(data['size_bytes']!, _sizeBytesMeta),
+      );
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
+    if (data.containsKey('progress_pct')) {
+      context.handle(
+        _progressPctMeta,
+        progressPct.isAcceptableOrUnknown(
+          data['progress_pct']!,
+          _progressPctMeta,
+        ),
+      );
+    }
+    if (data.containsKey('cloud_object_path')) {
+      context.handle(
+        _cloudObjectPathMeta,
+        cloudObjectPath.isAcceptableOrUnknown(
+          data['cloud_object_path']!,
+          _cloudObjectPathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('manifest_json')) {
+      context.handle(
+        _manifestJsonMeta,
+        manifestJson.isAcceptableOrUnknown(
+          data['manifest_json']!,
+          _manifestJsonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('failure_reason')) {
+      context.handle(
+        _failureReasonMeta,
+        failureReason.isAcceptableOrUnknown(
+          data['failure_reason']!,
+          _failureReasonMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  RockScanRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RockScanRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      remoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_id'],
+      ),
+      dirty: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dirty'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      uploadState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}upload_state'],
+      )!,
+      videoObjectPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}video_object_path'],
+      ),
+      durationMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}duration_ms'],
+      ),
+      sizeBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}size_bytes'],
+      ),
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      progressPct: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}progress_pct'],
+      ),
+      cloudObjectPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}cloud_object_path'],
+      ),
+      manifestJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}manifest_json'],
+      ),
+      failureReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}failure_reason'],
+      ),
+    );
+  }
+
+  @override
+  $RockScansTable createAlias(String alias) {
+    return $RockScansTable(attachedDatabase, alias);
+  }
+}
+
+class RockScanRow extends DataClass implements Insertable<RockScanRow> {
+  final String id;
+  final int createdAt;
+  final int updatedAt;
+  final int? deletedAt;
+  final String? remoteId;
+  final bool dirty;
+  final String? ownerId;
+
+  /// The wall this captures. A wall may accumulate several scans over time
+  /// (different light, more of the face, a better pass); none supersedes the
+  /// others automatically.
+  final String wallId;
+
+  /// CLIENT-OWNED. How far the source video has got toward the cloud —
+  /// `pending`, `uploading`, `uploaded`, or `failed` (see `RockScanUpload`).
+  ///
+  /// This, not [status], is what makes a scan eligible for reconstruction:
+  /// the worker claims rows where `uploadState = 'uploaded' AND status =
+  /// 'pending'`. Deriving the queue from the column the CLIENT owns means no
+  /// trigger, no server-side state machine, and no way for a half-uploaded
+  /// video to be picked up.
+  final String uploadState;
+
+  /// CLIENT-OWNED. Storage object key of the source video, once uploaded, or
+  /// `null` while it is still local-only.
+  final String? videoObjectPath;
+
+  /// CLIENT-OWNED. Length of the source video in milliseconds, as reported at
+  /// capture time — a quality hint for the reconstruction and for the UI, and
+  /// `null` when the picker did not say.
+  final int? durationMs;
+
+  /// CLIENT-OWNED. Source video size in bytes, for upload progress and for
+  /// the storage-budget conversation. `null` until the bytes are known.
+  final int? sizeBytes;
+
+  /// SERVER-OWNED. Reconstruction state — `pending`, `processing`, `ready` or
+  /// `failed` (see `RockScanStatus`). Never pushed from a client.
+  final String status;
+
+  /// SERVER-OWNED. Coarse 0-100 progress while [status] is `processing`, or
+  /// `null` when the worker does not report it. Advisory only: nothing
+  /// branches on it, so a worker that never writes it is fully supported.
+  final int? progressPct;
+
+  /// SERVER-OWNED. Storage object key of the finished point cloud, or `null`
+  /// until one exists.
+  final String? cloudObjectPath;
+
+  /// SERVER-OWNED. The reconstruction manifest as JSON — camera poses,
+  /// bounding box, point count and the worker's own quality figures (see
+  /// `RockScanManifest`). Kept as text rather than exploded into columns
+  /// because its shape belongs to the worker and will change faster than a
+  /// migration can follow.
+  final String? manifestJson;
+
+  /// SERVER-OWNED. Why reconstruction failed, in words meant for a climber
+  /// ("not enough overlap between frames"), or `null`. Shown verbatim, so the
+  /// worker is responsible for keeping it human.
+  final String? failureReason;
+  const RockScanRow({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+    this.remoteId,
+    required this.dirty,
+    this.ownerId,
+    required this.wallId,
+    required this.uploadState,
+    this.videoObjectPath,
+    this.durationMs,
+    this.sizeBytes,
+    required this.status,
+    this.progressPct,
+    this.cloudObjectPath,
+    this.manifestJson,
+    this.failureReason,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    if (!nullToAbsent || remoteId != null) {
+      map['remote_id'] = Variable<String>(remoteId);
+    }
+    map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
+    map['wall_id'] = Variable<String>(wallId);
+    map['upload_state'] = Variable<String>(uploadState);
+    if (!nullToAbsent || videoObjectPath != null) {
+      map['video_object_path'] = Variable<String>(videoObjectPath);
+    }
+    if (!nullToAbsent || durationMs != null) {
+      map['duration_ms'] = Variable<int>(durationMs);
+    }
+    if (!nullToAbsent || sizeBytes != null) {
+      map['size_bytes'] = Variable<int>(sizeBytes);
+    }
+    map['status'] = Variable<String>(status);
+    if (!nullToAbsent || progressPct != null) {
+      map['progress_pct'] = Variable<int>(progressPct);
+    }
+    if (!nullToAbsent || cloudObjectPath != null) {
+      map['cloud_object_path'] = Variable<String>(cloudObjectPath);
+    }
+    if (!nullToAbsent || manifestJson != null) {
+      map['manifest_json'] = Variable<String>(manifestJson);
+    }
+    if (!nullToAbsent || failureReason != null) {
+      map['failure_reason'] = Variable<String>(failureReason);
+    }
+    return map;
+  }
+
+  RockScansCompanion toCompanion(bool nullToAbsent) {
+    return RockScansCompanion(
+      id: Value(id),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      remoteId: remoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteId),
+      dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
+      wallId: Value(wallId),
+      uploadState: Value(uploadState),
+      videoObjectPath: videoObjectPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(videoObjectPath),
+      durationMs: durationMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationMs),
+      sizeBytes: sizeBytes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sizeBytes),
+      status: Value(status),
+      progressPct: progressPct == null && nullToAbsent
+          ? const Value.absent()
+          : Value(progressPct),
+      cloudObjectPath: cloudObjectPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cloudObjectPath),
+      manifestJson: manifestJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(manifestJson),
+      failureReason: failureReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(failureReason),
+    );
+  }
+
+  factory RockScanRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RockScanRow(
+      id: serializer.fromJson<String>(json['id']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      remoteId: serializer.fromJson<String?>(json['remoteId']),
+      dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+      uploadState: serializer.fromJson<String>(json['uploadState']),
+      videoObjectPath: serializer.fromJson<String?>(json['videoObjectPath']),
+      durationMs: serializer.fromJson<int?>(json['durationMs']),
+      sizeBytes: serializer.fromJson<int?>(json['sizeBytes']),
+      status: serializer.fromJson<String>(json['status']),
+      progressPct: serializer.fromJson<int?>(json['progressPct']),
+      cloudObjectPath: serializer.fromJson<String?>(json['cloudObjectPath']),
+      manifestJson: serializer.fromJson<String?>(json['manifestJson']),
+      failureReason: serializer.fromJson<String?>(json['failureReason']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'remoteId': serializer.toJson<String?>(remoteId),
+      'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
+      'wallId': serializer.toJson<String>(wallId),
+      'uploadState': serializer.toJson<String>(uploadState),
+      'videoObjectPath': serializer.toJson<String?>(videoObjectPath),
+      'durationMs': serializer.toJson<int?>(durationMs),
+      'sizeBytes': serializer.toJson<int?>(sizeBytes),
+      'status': serializer.toJson<String>(status),
+      'progressPct': serializer.toJson<int?>(progressPct),
+      'cloudObjectPath': serializer.toJson<String?>(cloudObjectPath),
+      'manifestJson': serializer.toJson<String?>(manifestJson),
+      'failureReason': serializer.toJson<String?>(failureReason),
+    };
+  }
+
+  RockScanRow copyWith({
+    String? id,
+    int? createdAt,
+    int? updatedAt,
+    Value<int?> deletedAt = const Value.absent(),
+    Value<String?> remoteId = const Value.absent(),
+    bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
+    String? wallId,
+    String? uploadState,
+    Value<String?> videoObjectPath = const Value.absent(),
+    Value<int?> durationMs = const Value.absent(),
+    Value<int?> sizeBytes = const Value.absent(),
+    String? status,
+    Value<int?> progressPct = const Value.absent(),
+    Value<String?> cloudObjectPath = const Value.absent(),
+    Value<String?> manifestJson = const Value.absent(),
+    Value<String?> failureReason = const Value.absent(),
+  }) => RockScanRow(
+    id: id ?? this.id,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    remoteId: remoteId.present ? remoteId.value : this.remoteId,
+    dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    wallId: wallId ?? this.wallId,
+    uploadState: uploadState ?? this.uploadState,
+    videoObjectPath: videoObjectPath.present
+        ? videoObjectPath.value
+        : this.videoObjectPath,
+    durationMs: durationMs.present ? durationMs.value : this.durationMs,
+    sizeBytes: sizeBytes.present ? sizeBytes.value : this.sizeBytes,
+    status: status ?? this.status,
+    progressPct: progressPct.present ? progressPct.value : this.progressPct,
+    cloudObjectPath: cloudObjectPath.present
+        ? cloudObjectPath.value
+        : this.cloudObjectPath,
+    manifestJson: manifestJson.present ? manifestJson.value : this.manifestJson,
+    failureReason: failureReason.present
+        ? failureReason.value
+        : this.failureReason,
+  );
+  RockScanRow copyWithCompanion(RockScansCompanion data) {
+    return RockScanRow(
+      id: data.id.present ? data.id.value : this.id,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
+      dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      uploadState: data.uploadState.present
+          ? data.uploadState.value
+          : this.uploadState,
+      videoObjectPath: data.videoObjectPath.present
+          ? data.videoObjectPath.value
+          : this.videoObjectPath,
+      durationMs: data.durationMs.present
+          ? data.durationMs.value
+          : this.durationMs,
+      sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
+      status: data.status.present ? data.status.value : this.status,
+      progressPct: data.progressPct.present
+          ? data.progressPct.value
+          : this.progressPct,
+      cloudObjectPath: data.cloudObjectPath.present
+          ? data.cloudObjectPath.value
+          : this.cloudObjectPath,
+      manifestJson: data.manifestJson.present
+          ? data.manifestJson.value
+          : this.manifestJson,
+      failureReason: data.failureReason.present
+          ? data.failureReason.value
+          : this.failureReason,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RockScanRow(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId, ')
+          ..write('uploadState: $uploadState, ')
+          ..write('videoObjectPath: $videoObjectPath, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('status: $status, ')
+          ..write('progressPct: $progressPct, ')
+          ..write('cloudObjectPath: $cloudObjectPath, ')
+          ..write('manifestJson: $manifestJson, ')
+          ..write('failureReason: $failureReason')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+    uploadState,
+    videoObjectPath,
+    durationMs,
+    sizeBytes,
+    status,
+    progressPct,
+    cloudObjectPath,
+    manifestJson,
+    failureReason,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RockScanRow &&
+          other.id == this.id &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt &&
+          other.remoteId == this.remoteId &&
+          other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
+          other.wallId == this.wallId &&
+          other.uploadState == this.uploadState &&
+          other.videoObjectPath == this.videoObjectPath &&
+          other.durationMs == this.durationMs &&
+          other.sizeBytes == this.sizeBytes &&
+          other.status == this.status &&
+          other.progressPct == this.progressPct &&
+          other.cloudObjectPath == this.cloudObjectPath &&
+          other.manifestJson == this.manifestJson &&
+          other.failureReason == this.failureReason);
+}
+
+class RockScansCompanion extends UpdateCompanion<RockScanRow> {
+  final Value<String> id;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int?> deletedAt;
+  final Value<String?> remoteId;
+  final Value<bool> dirty;
+  final Value<String?> ownerId;
+  final Value<String> wallId;
+  final Value<String> uploadState;
+  final Value<String?> videoObjectPath;
+  final Value<int?> durationMs;
+  final Value<int?> sizeBytes;
+  final Value<String> status;
+  final Value<int?> progressPct;
+  final Value<String?> cloudObjectPath;
+  final Value<String?> manifestJson;
+  final Value<String?> failureReason;
+  final Value<int> rowid;
+  const RockScansCompanion({
+    this.id = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.uploadState = const Value.absent(),
+    this.videoObjectPath = const Value.absent(),
+    this.durationMs = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.status = const Value.absent(),
+    this.progressPct = const Value.absent(),
+    this.cloudObjectPath = const Value.absent(),
+    this.manifestJson = const Value.absent(),
+    this.failureReason = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RockScansCompanion.insert({
+    required String id,
+    required int createdAt,
+    required int updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    required String wallId,
+    this.uploadState = const Value.absent(),
+    this.videoObjectPath = const Value.absent(),
+    this.durationMs = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.status = const Value.absent(),
+    this.progressPct = const Value.absent(),
+    this.cloudObjectPath = const Value.absent(),
+    this.manifestJson = const Value.absent(),
+    this.failureReason = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt),
+       wallId = Value(wallId);
+  static Insertable<RockScanRow> custom({
+    Expression<String>? id,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? deletedAt,
+    Expression<String>? remoteId,
+    Expression<bool>? dirty,
+    Expression<String>? ownerId,
+    Expression<String>? wallId,
+    Expression<String>? uploadState,
+    Expression<String>? videoObjectPath,
+    Expression<int>? durationMs,
+    Expression<int>? sizeBytes,
+    Expression<String>? status,
+    Expression<int>? progressPct,
+    Expression<String>? cloudObjectPath,
+    Expression<String>? manifestJson,
+    Expression<String>? failureReason,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remoteId != null) 'remote_id': remoteId,
+      if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (wallId != null) 'wall_id': wallId,
+      if (uploadState != null) 'upload_state': uploadState,
+      if (videoObjectPath != null) 'video_object_path': videoObjectPath,
+      if (durationMs != null) 'duration_ms': durationMs,
+      if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (status != null) 'status': status,
+      if (progressPct != null) 'progress_pct': progressPct,
+      if (cloudObjectPath != null) 'cloud_object_path': cloudObjectPath,
+      if (manifestJson != null) 'manifest_json': manifestJson,
+      if (failureReason != null) 'failure_reason': failureReason,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RockScansCompanion copyWith({
+    Value<String>? id,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int?>? deletedAt,
+    Value<String?>? remoteId,
+    Value<bool>? dirty,
+    Value<String?>? ownerId,
+    Value<String>? wallId,
+    Value<String>? uploadState,
+    Value<String?>? videoObjectPath,
+    Value<int?>? durationMs,
+    Value<int?>? sizeBytes,
+    Value<String>? status,
+    Value<int?>? progressPct,
+    Value<String?>? cloudObjectPath,
+    Value<String?>? manifestJson,
+    Value<String?>? failureReason,
+    Value<int>? rowid,
+  }) {
+    return RockScansCompanion(
+      id: id ?? this.id,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteId: remoteId ?? this.remoteId,
+      dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
+      wallId: wallId ?? this.wallId,
+      uploadState: uploadState ?? this.uploadState,
+      videoObjectPath: videoObjectPath ?? this.videoObjectPath,
+      durationMs: durationMs ?? this.durationMs,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      status: status ?? this.status,
+      progressPct: progressPct ?? this.progressPct,
+      cloudObjectPath: cloudObjectPath ?? this.cloudObjectPath,
+      manifestJson: manifestJson ?? this.manifestJson,
+      failureReason: failureReason ?? this.failureReason,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (remoteId.present) {
+      map['remote_id'] = Variable<String>(remoteId.value);
+    }
+    if (dirty.present) {
+      map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (uploadState.present) {
+      map['upload_state'] = Variable<String>(uploadState.value);
+    }
+    if (videoObjectPath.present) {
+      map['video_object_path'] = Variable<String>(videoObjectPath.value);
+    }
+    if (durationMs.present) {
+      map['duration_ms'] = Variable<int>(durationMs.value);
+    }
+    if (sizeBytes.present) {
+      map['size_bytes'] = Variable<int>(sizeBytes.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (progressPct.present) {
+      map['progress_pct'] = Variable<int>(progressPct.value);
+    }
+    if (cloudObjectPath.present) {
+      map['cloud_object_path'] = Variable<String>(cloudObjectPath.value);
+    }
+    if (manifestJson.present) {
+      map['manifest_json'] = Variable<String>(manifestJson.value);
+    }
+    if (failureReason.present) {
+      map['failure_reason'] = Variable<String>(failureReason.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RockScansCompanion(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId, ')
+          ..write('uploadState: $uploadState, ')
+          ..write('videoObjectPath: $videoObjectPath, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('status: $status, ')
+          ..write('progressPct: $progressPct, ')
+          ..write('cloudObjectPath: $cloudObjectPath, ')
+          ..write('manifestJson: $manifestJson, ')
+          ..write('failureReason: $failureReason, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $AscentsTable extends Ascents with TableInfo<$AscentsTable, Ascent> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -11523,6 +12552,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $PhotosTable photos = $PhotosTable(this);
   late final $RoutesTable routes = $RoutesTable(this);
   late final $RouteLinesTable routeLines = $RouteLinesTable(this);
+  late final $RockScansTable rockScans = $RockScansTable(this);
   late final $AscentsTable ascents = $AscentsTable(this);
   late final $CommentsTable comments = $CommentsTable(this);
   late final $LikesTable likes = $LikesTable(this);
@@ -11606,6 +12636,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     photos,
     routes,
     routeLines,
+    rockScans,
     ascents,
     comments,
     likes,
@@ -12719,6 +13750,24 @@ final class $$WallsTableReferences
     );
   }
 
+  static MultiTypedResultKey<$RockScansTable, List<RockScanRow>>
+  _rockScansRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.rockScans,
+    aliasName: 'walls__id__rock_scans__wall_id',
+  );
+
+  $$RockScansTableProcessedTableManager get rockScansRefs {
+    final manager = $$RockScansTableTableManager(
+      $_db,
+      $_db.rockScans,
+    ).filter((f) => f.wallId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_rockScansRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
   static MultiTypedResultKey<$AscentsTable, List<Ascent>> _ascentsRefsTable(
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
@@ -12924,6 +13973,31 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
           }) => $$RoutesTableFilterComposer(
             $db: $db,
             $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> rockScansRefs(
+    Expression<bool> Function($$RockScansTableFilterComposer f) f,
+  ) {
+    final $$RockScansTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.rockScans,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RockScansTableFilterComposer(
+            $db: $db,
+            $table: $db.rockScans,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -13252,6 +14326,31 @@ class $$WallsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> rockScansRefs<T extends Object>(
+    Expression<T> Function($$RockScansTableAnnotationComposer a) f,
+  ) {
+    final $$RockScansTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.rockScans,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RockScansTableAnnotationComposer(
+            $db: $db,
+            $table: $db.rockScans,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> ascentsRefs<T extends Object>(
     Expression<T> Function($$AscentsTableAnnotationComposer a) f,
   ) {
@@ -13345,6 +14444,7 @@ class $$WallsTableTableManager
             bool sectorId,
             bool photosRefs,
             bool routesRefs,
+            bool rockScansRefs,
             bool ascentsRefs,
             bool commentsRefs,
             bool likesRefs,
@@ -13448,6 +14548,7 @@ class $$WallsTableTableManager
                 sectorId = false,
                 photosRefs = false,
                 routesRefs = false,
+                rockScansRefs = false,
                 ascentsRefs = false,
                 commentsRefs = false,
                 likesRefs = false,
@@ -13457,6 +14558,7 @@ class $$WallsTableTableManager
                   explicitlyWatchedTables: [
                     if (photosRefs) db.photos,
                     if (routesRefs) db.routes,
+                    if (rockScansRefs) db.rockScans,
                     if (ascentsRefs) db.ascents,
                     if (commentsRefs) db.comments,
                     if (likesRefs) db.likes,
@@ -13515,6 +14617,27 @@ class $$WallsTableTableManager
                               ._routesRefsTable(db),
                           managerFromTypedResult: (p0) =>
                               $$WallsTableReferences(db, table, p0).routesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.wallId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (rockScansRefs)
+                        await $_getPrefetchedData<
+                          Wall,
+                          $WallsTable,
+                          RockScanRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$WallsTableReferences
+                              ._rockScansRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$WallsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).rockScansRefs,
                           referencedItemsForCurrentItem:
                               (item, referencedItems) => referencedItems.where(
                                 (e) => e.wallId == item.id,
@@ -13588,6 +14711,7 @@ typedef $$WallsTableProcessedTableManager =
         bool sectorId,
         bool photosRefs,
         bool routesRefs,
+        bool rockScansRefs,
         bool ascentsRefs,
         bool commentsRefs,
         bool likesRefs,
@@ -16013,6 +17137,565 @@ typedef $$RouteLinesTableProcessedTableManager =
       (RouteLine, $$RouteLinesTableReferences),
       RouteLine,
       PrefetchHooks Function({bool routeId, bool photoId})
+    >;
+typedef $$RockScansTableCreateCompanionBuilder =
+    RockScansCompanion Function({
+      required String id,
+      required int createdAt,
+      required int updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      required String wallId,
+      Value<String> uploadState,
+      Value<String?> videoObjectPath,
+      Value<int?> durationMs,
+      Value<int?> sizeBytes,
+      Value<String> status,
+      Value<int?> progressPct,
+      Value<String?> cloudObjectPath,
+      Value<String?> manifestJson,
+      Value<String?> failureReason,
+      Value<int> rowid,
+    });
+typedef $$RockScansTableUpdateCompanionBuilder =
+    RockScansCompanion Function({
+      Value<String> id,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      Value<String> wallId,
+      Value<String> uploadState,
+      Value<String?> videoObjectPath,
+      Value<int?> durationMs,
+      Value<int?> sizeBytes,
+      Value<String> status,
+      Value<int?> progressPct,
+      Value<String?> cloudObjectPath,
+      Value<String?> manifestJson,
+      Value<String?> failureReason,
+      Value<int> rowid,
+    });
+
+final class $$RockScansTableReferences
+    extends BaseReferences<_$AppDatabase, $RockScansTable, RockScanRow> {
+  $$RockScansTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $WallsTable _wallIdTable(_$AppDatabase db) =>
+      db.walls.createAlias('rock_scans__wall_id__walls__id');
+
+  $$WallsTableProcessedTableManager get wallId {
+    final $_column = $_itemColumn<String>('wall_id')!;
+
+    final manager = $$WallsTableTableManager(
+      $_db,
+      $_db.walls,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_wallIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$RockScansTableFilterComposer
+    extends Composer<_$AppDatabase, $RockScansTable> {
+  $$RockScansTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get videoObjectPath => $composableBuilder(
+    column: $table.videoObjectPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get progressPct => $composableBuilder(
+    column: $table.progressPct,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get cloudObjectPath => $composableBuilder(
+    column: $table.cloudObjectPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get manifestJson => $composableBuilder(
+    column: $table.manifestJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$WallsTableFilterComposer get wallId {
+    final $$WallsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableFilterComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RockScansTableOrderingComposer
+    extends Composer<_$AppDatabase, $RockScansTable> {
+  $$RockScansTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get videoObjectPath => $composableBuilder(
+    column: $table.videoObjectPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get progressPct => $composableBuilder(
+    column: $table.progressPct,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get cloudObjectPath => $composableBuilder(
+    column: $table.cloudObjectPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get manifestJson => $composableBuilder(
+    column: $table.manifestJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$WallsTableOrderingComposer get wallId {
+    final $$WallsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableOrderingComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RockScansTableAnnotationComposer
+    extends Composer<_$AppDatabase, $RockScansTable> {
+  $$RockScansTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get remoteId =>
+      $composableBuilder(column: $table.remoteId, builder: (column) => column);
+
+  GeneratedColumn<bool> get dirty =>
+      $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get videoObjectPath => $composableBuilder(
+    column: $table.videoObjectPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get sizeBytes =>
+      $composableBuilder(column: $table.sizeBytes, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<int> get progressPct => $composableBuilder(
+    column: $table.progressPct,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get cloudObjectPath => $composableBuilder(
+    column: $table.cloudObjectPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get manifestJson => $composableBuilder(
+    column: $table.manifestJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => column,
+  );
+
+  $$WallsTableAnnotationComposer get wallId {
+    final $$WallsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RockScansTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $RockScansTable,
+          RockScanRow,
+          $$RockScansTableFilterComposer,
+          $$RockScansTableOrderingComposer,
+          $$RockScansTableAnnotationComposer,
+          $$RockScansTableCreateCompanionBuilder,
+          $$RockScansTableUpdateCompanionBuilder,
+          (RockScanRow, $$RockScansTableReferences),
+          RockScanRow,
+          PrefetchHooks Function({bool wallId})
+        > {
+  $$RockScansTableTableManager(_$AppDatabase db, $RockScansTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RockScansTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RockScansTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RockScansTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<String> uploadState = const Value.absent(),
+                Value<String?> videoObjectPath = const Value.absent(),
+                Value<int?> durationMs = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<int?> progressPct = const Value.absent(),
+                Value<String?> cloudObjectPath = const Value.absent(),
+                Value<String?> manifestJson = const Value.absent(),
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => RockScansCompanion(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                uploadState: uploadState,
+                videoObjectPath: videoObjectPath,
+                durationMs: durationMs,
+                sizeBytes: sizeBytes,
+                status: status,
+                progressPct: progressPct,
+                cloudObjectPath: cloudObjectPath,
+                manifestJson: manifestJson,
+                failureReason: failureReason,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int createdAt,
+                required int updatedAt,
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                required String wallId,
+                Value<String> uploadState = const Value.absent(),
+                Value<String?> videoObjectPath = const Value.absent(),
+                Value<int?> durationMs = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<int?> progressPct = const Value.absent(),
+                Value<String?> cloudObjectPath = const Value.absent(),
+                Value<String?> manifestJson = const Value.absent(),
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => RockScansCompanion.insert(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                uploadState: uploadState,
+                videoObjectPath: videoObjectPath,
+                durationMs: durationMs,
+                sizeBytes: sizeBytes,
+                status: status,
+                progressPct: progressPct,
+                cloudObjectPath: cloudObjectPath,
+                manifestJson: manifestJson,
+                failureReason: failureReason,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$RockScansTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({wallId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (wallId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.wallId,
+                                referencedTable: $$RockScansTableReferences
+                                    ._wallIdTable(db),
+                                referencedColumn: $$RockScansTableReferences
+                                    ._wallIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$RockScansTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $RockScansTable,
+      RockScanRow,
+      $$RockScansTableFilterComposer,
+      $$RockScansTableOrderingComposer,
+      $$RockScansTableAnnotationComposer,
+      $$RockScansTableCreateCompanionBuilder,
+      $$RockScansTableUpdateCompanionBuilder,
+      (RockScanRow, $$RockScansTableReferences),
+      RockScanRow,
+      PrefetchHooks Function({bool wallId})
     >;
 typedef $$AscentsTableCreateCompanionBuilder =
     AscentsCompanion Function({
@@ -19623,6 +21306,8 @@ class $AppDatabaseManager {
       $$RoutesTableTableManager(_db, _db.routes);
   $$RouteLinesTableTableManager get routeLines =>
       $$RouteLinesTableTableManager(_db, _db.routeLines);
+  $$RockScansTableTableManager get rockScans =>
+      $$RockScansTableTableManager(_db, _db.rockScans);
   $$AscentsTableTableManager get ascents =>
       $$AscentsTableTableManager(_db, _db.ascents);
   $$CommentsTableTableManager get comments =>

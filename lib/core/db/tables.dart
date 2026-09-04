@@ -586,6 +586,98 @@ class RouteLines extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+/// A 3D capture of a wall: the source video a climber recorded on site, and
+/// the reconstruction produced from it.
+///
+/// ## This table has TWO owners, and that is the whole design
+///
+/// The sync engine is a client-side full-state re-push with last-writer-wins
+/// (`shouldPushLww`, local winning ties). That is exactly wrong for a column
+/// the BACKEND writes: a phone that has not pulled since the worker finished
+/// would push its stale `status: 'pending'` straight over the worker's
+/// `status: 'ready'` and lose the reconstruction.
+///
+/// So the columns are split by who writes them, and the push path strips the
+/// server's half (see `serverOwnedSyncColumns` in `sync_remote.dart`):
+///
+///  - **Client-owned** — [wallId], [uploadState], [videoObjectPath],
+///    [durationMs], [sizeBytes], plus everything in [SyncColumns]. Pushed
+///    normally.
+///  - **Server-owned** — [status], [progressPct], [cloudObjectPath],
+///    [manifestJson], [failureReason]. Never pushed; only ever arrive by
+///    pull. Omitting them from the upsert body is safe in both directions:
+///    an INSERT takes the Postgres default, and `ON CONFLICT DO UPDATE`
+///    leaves the stored value untouched — the same property that lets
+///    `localOnlySyncColumns` strip `dirty`/`remoteId` globally.
+///
+/// ## Nothing here is load-bearing for the topo
+///
+/// A wall with no scan, a scan still processing, and a scan that failed
+/// outright are all ordinary states. The semantic baseline
+/// ([Walls.baselineJson]) and the face layout stay authoritative and are
+/// computed with no reference to this table at all — a scan is an extra way
+/// to LOOK at the rock, never a dependency of the topo. Deleting every row
+/// here changes nothing a climber can read.
+@DataClassName('RockScanRow')
+class RockScans extends Table with SyncColumns {
+  /// The wall this captures. A wall may accumulate several scans over time
+  /// (different light, more of the face, a better pass); none supersedes the
+  /// others automatically.
+  TextColumn get wallId => text().references(Walls, #id)();
+
+  /// CLIENT-OWNED. How far the source video has got toward the cloud —
+  /// `pending`, `uploading`, `uploaded`, or `failed` (see `RockScanUpload`).
+  ///
+  /// This, not [status], is what makes a scan eligible for reconstruction:
+  /// the worker claims rows where `uploadState = 'uploaded' AND status =
+  /// 'pending'`. Deriving the queue from the column the CLIENT owns means no
+  /// trigger, no server-side state machine, and no way for a half-uploaded
+  /// video to be picked up.
+  TextColumn get uploadState =>
+      text().withDefault(const Constant('pending'))();
+
+  /// CLIENT-OWNED. Storage object key of the source video, once uploaded, or
+  /// `null` while it is still local-only.
+  TextColumn get videoObjectPath => text().nullable()();
+
+  /// CLIENT-OWNED. Length of the source video in milliseconds, as reported at
+  /// capture time — a quality hint for the reconstruction and for the UI, and
+  /// `null` when the picker did not say.
+  IntColumn get durationMs => integer().nullable()();
+
+  /// CLIENT-OWNED. Source video size in bytes, for upload progress and for
+  /// the storage-budget conversation. `null` until the bytes are known.
+  IntColumn get sizeBytes => integer().nullable()();
+
+  /// SERVER-OWNED. Reconstruction state — `pending`, `processing`, `ready` or
+  /// `failed` (see `RockScanStatus`). Never pushed from a client.
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+
+  /// SERVER-OWNED. Coarse 0-100 progress while [status] is `processing`, or
+  /// `null` when the worker does not report it. Advisory only: nothing
+  /// branches on it, so a worker that never writes it is fully supported.
+  IntColumn get progressPct => integer().nullable()();
+
+  /// SERVER-OWNED. Storage object key of the finished point cloud, or `null`
+  /// until one exists.
+  TextColumn get cloudObjectPath => text().nullable()();
+
+  /// SERVER-OWNED. The reconstruction manifest as JSON — camera poses,
+  /// bounding box, point count and the worker's own quality figures (see
+  /// `RockScanManifest`). Kept as text rather than exploded into columns
+  /// because its shape belongs to the worker and will change faster than a
+  /// migration can follow.
+  TextColumn get manifestJson => text().nullable()();
+
+  /// SERVER-OWNED. Why reconstruction failed, in words meant for a climber
+  /// ("not enough overlap between frames"), or `null`. Shown verbatim, so the
+  /// worker is responsible for keeping it human.
+  TextColumn get failureReason => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // Two indexes because a comment attaches to EITHER a wall or an ascent (see
 // `wallId`/`ascentId` below) and both are read paths: the topo detail screen
 // filters on one, the ascent detail screen on the other.

@@ -1373,3 +1373,96 @@ create index if not exists guidebook_imports_owner_pending_idx
 -- rows and its UPDATE and DELETE against A's row both affected 0 rows; anon saw
 -- 0 rows. The probe ended in a RAISE so nothing persisted, and the table was
 -- confirmed empty afterwards.
+
+
+-- ---------------------------------------------------------------------------
+-- rock_scans — the video a climber records at the crag, and the 3D
+-- reconstruction a worker builds from it.
+--
+-- Applied live 2026-09-04 (delta: supabase/migrations/2026-09-04_rock_scans.sql).
+--
+-- TWO WRITERS. The app owns the capture half ("wallId", "uploadState",
+-- "videoObjectPath", "durationMs", "sizeBytes"); a reconstruction worker
+-- running as service_role owns the result half ("status", "progressPct",
+-- "cloudObjectPath", "manifestJson", "failureReason"). The client's sync
+-- engine is a full-state re-push under last-writer-wins, so it strips the
+-- worker's columns before pushing (`serverOwnedSyncColumns` in
+-- `sync_remote.dart`) and relies on `ON CONFLICT DO UPDATE` leaving an
+-- omitted column untouched. A worker column added here MUST be added there
+-- too, or a phone that has not pulled since the job finished will push its
+-- stale copy straight over the result.
+--
+-- Nothing here is load-bearing for the topo: a wall with no scan, a scan
+-- still processing and a scan that failed are all ordinary states, and the
+-- semantic baseline (walls."baselineJson") is computed without reference to
+-- this table at all.
+CREATE TABLE IF NOT EXISTS public.rock_scans (
+  "id"               TEXT PRIMARY KEY,
+  "createdAt"        BIGINT  NOT NULL,
+  "updatedAt"        BIGINT  NOT NULL,
+  "deletedAt"        BIGINT,
+  "remoteId"         TEXT,
+  "dirty"            BOOLEAN NOT NULL DEFAULT false,
+  "ownerId"          TEXT,
+  "wallId"           TEXT    NOT NULL,
+  "uploadState"      TEXT    NOT NULL DEFAULT 'pending',
+  "videoObjectPath"  TEXT,
+  "durationMs"       BIGINT,
+  "sizeBytes"        BIGINT,
+  "status"           TEXT    NOT NULL DEFAULT 'pending',
+  "progressPct"      BIGINT,
+  "cloudObjectPath"  TEXT,
+  "manifestJson"     TEXT,
+  "failureReason"    TEXT
+);
+
+-- The worker's claim query. Partial, so it stays small however many finished
+-- scans accumulate.
+CREATE INDEX IF NOT EXISTS idx_rock_scans_claimable
+  ON public.rock_scans ("createdAt")
+  WHERE "uploadState" = 'uploaded'
+    AND "status" = 'pending'
+    AND "deletedAt" IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_rock_scans_wall
+  ON public.rock_scans ("wallId")
+  WHERE "deletedAt" IS NULL;
+
+ALTER TABLE public.rock_scans ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rock_scans_owner_all ON public.rock_scans;
+CREATE POLICY rock_scans_owner_all ON public.rock_scans
+  FOR ALL
+  USING ("ownerId" = (auth.uid())::text)
+  WITH CHECK ("ownerId" = (auth.uid())::text);
+
+DROP POLICY IF EXISTS rock_scans_shared_select ON public.rock_scans;
+CREATE POLICY rock_scans_shared_select ON public.rock_scans
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.walls w
+      WHERE w.id = rock_scans."wallId"
+        AND w.visibility = 'shared'
+    )
+  );
+
+-- Storage bucket for source videos and reconstructed point clouds. Separate
+-- from `topo-photos` on purpose: a scan video is one to two orders of
+-- magnitude larger than a photo, and a source video is regenerable (walk back
+-- to the crag) where the user's photos are not (D-5, never evicted).
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES ('rock-scans', 'rock-scans', false, 524288000)
+ON CONFLICT (id) DO UPDATE SET file_size_limit = EXCLUDED.file_size_limit;
+
+DROP POLICY IF EXISTS rock_scans_own_all ON storage.objects;
+CREATE POLICY rock_scans_own_all ON storage.objects
+  FOR ALL
+  USING (
+    bucket_id = 'rock-scans'
+    AND (storage.foldername(name))[1] = (auth.uid())::text
+  )
+  WITH CHECK (
+    bucket_id = 'rock-scans'
+    AND (storage.foldername(name))[1] = (auth.uid())::text
+  );

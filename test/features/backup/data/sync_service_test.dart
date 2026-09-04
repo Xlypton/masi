@@ -861,6 +861,204 @@ void main() {
   // helper's own unit tests cannot catch a regression of that shape, because
   // the bug was the absence of the call site rather than a fault inside it —
   // which is why this test drives the whole push and reads the remote back.
+  group('pushOwn — rock_scans', () {
+    Future<void> seedScan(
+      AppDatabase db, {
+      required String ownerId,
+      required String wallId,
+      required String scanId,
+      String uploadState = 'uploaded',
+      String status = 'pending',
+      String? cloudObjectPath,
+      String? manifestJson,
+      String? failureReason,
+      int? progressPct,
+    }) async {
+      await db.into(db.rockScans).insert(
+        RockScansCompanion.insert(
+          id: scanId,
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: Value(ownerId),
+          wallId: wallId,
+          uploadState: Value(uploadState),
+          videoObjectPath: Value('$ownerId/$scanId.mp4'),
+          durationMs: const Value(45000),
+          sizeBytes: const Value(52428800),
+          status: Value(status),
+          progressPct: Value(progressPct),
+          cloudObjectPath: Value(cloudObjectPath),
+          manifestJson: Value(manifestJson),
+          failureReason: Value(failureReason),
+        ),
+      );
+    }
+
+    test('a captured scan reaches the remote and stops being dirty', () async {
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        localPath: file.path,
+      );
+      await seedScan(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        scanId: 'scan-1',
+      );
+
+      final result = await c.service.pushOwn();
+      expect(result.didPush, isTrue);
+
+      final ownRows = await remote.fetchOwnRows(_uidU1);
+      final pushed = ownRows['rock_scans'];
+      expect(
+        pushed?.map((r) => r['id']),
+        ['scan-1'],
+        reason: 'a table absent from `tablesToRows` is skipped by '
+            '`upsertOwnRows` with a bare `continue` — no error, no log. That '
+            'is exactly how route_lines sat at zero rows in production for '
+            'months, so this assertion is the one that catches it.',
+      );
+      expect(
+        pushed!.single['videoObjectPath'],
+        '$_uidU1/scan-1.mp4',
+        reason: 'the client-owned half must survive the trip, not just the id',
+      );
+      expect(pushed.single['uploadState'], 'uploaded');
+      expect(pushed.single['wallId'], 'wall-1');
+
+      final scan = await (c.db.select(
+        c.db.rockScans,
+      )..where((t) => t.id.equals('scan-1'))).getSingle();
+      expect(
+        scan.dirty,
+        isFalse,
+        reason: '`_clearDirty` has a branch per table; without one for '
+            'rock_scans the row lands but stays dirty forever, and every '
+            'dirtyOnly push re-sends every scan the user has ever made',
+      );
+    });
+
+    test('the columns the worker owns are never pushed', () async {
+      // THE test for this table. The push is a full-state re-push under
+      // last-writer-wins with local winning ties, so a phone that has not
+      // pulled since a job finished would otherwise send its stale
+      // `status: 'pending'` straight over the worker's `status: 'ready'` —
+      // and with no outbox to replay from, the reconstruction would be gone
+      // for good.
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        localPath: file.path,
+      );
+      // Deliberately stale/garbage values in every server-owned column: if
+      // any of them travels, this test fails.
+      await seedScan(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        scanId: 'scan-1',
+        status: 'pending',
+        progressPct: 3,
+        cloudObjectPath: 'stale/cloud.ply',
+        manifestJson: '{"version":1,"engine":"stale"}',
+        failureReason: 'stale failure',
+      );
+
+      await c.service.pushOwn();
+
+      final pushed = (await remote.fetchOwnRows(_uidU1))['rock_scans']!.single;
+      for (final column in serverOwnedSyncColumns['rock_scans']!) {
+        expect(
+          pushed.containsKey(column),
+          isFalse,
+          reason: 'the client must omit the worker-owned column `$column` '
+              'entirely — omitting it makes the upsert leave the stored '
+              'value untouched, which is the whole mechanism',
+        );
+      }
+      // …while the client-owned half of the same row still goes.
+      expect(pushed['uploadState'], 'uploaded');
+      expect(pushed['id'], 'scan-1');
+      expect(
+        pushed['updatedAt'],
+        100,
+        reason: 'stripping must not remove the fields the confirmed-push '
+            'dirty-clear keys on',
+      );
+    });
+
+    test('the local row keeps the worker-owned values it was pulled with',
+        () async {
+      // The mirror of the test above: stripping is a PUSH-side rule only.
+      // Nothing about it may erase what a pull wrote locally, or the app
+      // would forget the reconstruction it just learned about.
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        localPath: file.path,
+      );
+      await seedScan(
+        c.db,
+        ownerId: _uidU1,
+        wallId: 'wall-1',
+        scanId: 'scan-1',
+        status: 'ready',
+        cloudObjectPath: '$_uidU1/scan-1/cloud.ply',
+        manifestJson: '{"version":1,"pointCount":84213}',
+      );
+
+      await c.service.pushOwn();
+
+      final scan = await (c.db.select(
+        c.db.rockScans,
+      )..where((t) => t.id.equals('scan-1'))).getSingle();
+      expect(scan.status, 'ready');
+      expect(scan.cloudObjectPath, '$_uidU1/scan-1/cloud.ply');
+      expect(scan.manifestJson, '{"version":1,"pointCount":84213}');
+    });
+  });
+
   group('pushOwn — route_lines', () {
     Future<void> seedSecondLine(
       AppDatabase db, {

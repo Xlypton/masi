@@ -453,6 +453,95 @@ void main() {
   // drawn on a second photo was pulled, exported and rendered locally, and
   // never once uploaded. Silently, in both directions.
   // ---------------------------------------------------------------------
+  group('serverOwnedSyncColumns', () {
+    test('every entry names a real sync table', () {
+      for (final table in serverOwnedSyncColumns.keys) {
+        expect(
+          syncTableNames,
+          contains(table),
+          reason: 'a server-owned column set for a table that is never '
+              'pushed strips nothing and is silently dead',
+        );
+      }
+    });
+
+    test('never contradicts syncRequiredFields', () {
+      // The guard removes these columns and then checks the row for required
+      // fields. A column in both maps would make every row of that table fail
+      // the check for missing the field the strip had just removed — and,
+      // because the guard reports rather than throws, it would show up as
+      // "N rows excluded" rather than as anything pointing at the cause.
+      serverOwnedSyncColumns.forEach((table, owned) {
+        final required = syncRequiredFields[table] ?? const <String>[];
+        expect(
+          owned.intersection(required.toSet()),
+          isEmpty,
+          reason: 'table `$table` declares column(s) both server-owned and '
+              'required',
+        );
+      });
+    });
+
+    test('never overlaps the global local-only strip', () {
+      for (final owned in serverOwnedSyncColumns.values) {
+        expect(owned.intersection(localOnlySyncColumns), isEmpty);
+      }
+    });
+
+    test('rock_scans owns exactly the reconstruction result', () {
+      // Pinned deliberately: adding a worker-written column to the table
+      // without adding it here is the mistake this whole mechanism exists to
+      // prevent, and it fails silently (the client just clobbers it).
+      expect(serverOwnedSyncColumns['rock_scans'], {
+        'status',
+        'progressPct',
+        'cloudObjectPath',
+        'manifestJson',
+        'failureReason',
+      });
+    });
+  });
+
+  group('stripServerOwnedSyncColumns', () {
+    test('removes only the named columns for that table', () {
+      final row = {
+        'id': 'scan-1',
+        'updatedAt': 7,
+        'wallId': 'wall-1',
+        'uploadState': 'uploaded',
+        'status': 'ready',
+        'cloudObjectPath': 'u/scan-1/cloud.ply',
+      };
+      final stripped = stripServerOwnedSyncColumns('rock_scans', row);
+      expect(stripped.keys, ['id', 'updatedAt', 'wallId', 'uploadState']);
+    });
+
+    test('returns the row untouched for a table with no server-owned columns',
+        () {
+      final row = {'id': 'r1', 'status': 'whatever'};
+      expect(identical(stripServerOwnedSyncColumns('routes', row), row), isTrue,
+          reason: 'the common path must not copy');
+    });
+
+    test('does not mutate the caller\'s map', () {
+      final row = {'id': 'scan-1', 'status': 'ready'};
+      stripServerOwnedSyncColumns('rock_scans', row);
+      expect(row.containsKey('status'), isTrue);
+    });
+
+    test('keeps the fields the confirmed-push dirty-clear needs', () {
+      // `pushOwn` keys its dirty-clear on the pushed row's `id` + `updatedAt`,
+      // so a strip that removed either would silently stop clearing dirty.
+      final stripped = stripServerOwnedSyncColumns('rock_scans', {
+        'id': 'scan-1',
+        'updatedAt': 42,
+        'status': 'ready',
+      });
+      expect(stripped['id'], 'scan-1');
+      expect(stripped['updatedAt'], 42);
+    });
+  });
+
   group('routeLinesWithResolvableParents', () {
     Map<String, dynamic> line(String id, String routeId, String photoId) =>
         {'id': id, 'routeId': routeId, 'photoId': photoId};
