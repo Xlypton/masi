@@ -326,6 +326,7 @@ class BackupRepository {
     final photos = await _db.select(_db.photos).get();
     final routes = await _db.select(_db.routes).get();
     final routeLines = await _db.select(_db.routeLines).get();
+    final rockScans = await _db.select(_db.rockScans).get();
     final comments = await _db.select(_db.comments).get();
     final likes = await _db.select(_db.likes).get();
     final ascents = await _db.select(_db.ascents).get();
@@ -340,6 +341,7 @@ class BackupRepository {
         'photos': [for (final row in photos) row.toJson()],
         'routes': [for (final row in routes) row.toJson()],
         'route_lines': [for (final row in routeLines) row.toJson()],
+        'rock_scans': [for (final row in rockScans) row.toJson()],
         'comments': [for (final row in comments) row.toJson()],
         'likes': [for (final row in likes) row.toJson()],
         'ascents': [for (final row in ascents) row.toJson()],
@@ -413,6 +415,13 @@ class BackupRepository {
     await importTable(
       'route_lines',
       () => _importRouteLines(_rowsOf(tables, 'route_lines'), mode, sink),
+    );
+    // After walls, the only table a scan references. Independent of routes
+    // and photos: a scan is a capture of the ROCK, not of anything drawn on
+    // it, which is the same separation that lets the topo work with no scan.
+    await importTable(
+      'rock_scans',
+      () => _importRockScans(_rowsOf(tables, 'rock_scans'), mode, sink),
     );
     // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
     // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
@@ -832,6 +841,52 @@ class BackupRepository {
         continue;
       }
       await _db.into(_db.routeLines).insertOnConflictUpdate(line);
+    }
+  }
+
+  /// Imports rock scans.
+  ///
+  /// Note what is NOT restored here: the source video and the reconstructed
+  /// point cloud both live in Storage, not in the snapshot, so a restored row
+  /// may point at object keys whose bytes are gone. That is deliberate — a
+  /// backup that inlined a 60 MB video per scan would be unusable — and it is
+  /// safe because every consumer treats a missing artifact as "not ready
+  /// yet", the same state a scan occupies for the minutes before its worker
+  /// finishes.
+  Future<void> _importRockScans(
+    List<Map<String, dynamic>> rows,
+    ConflictMode mode,
+    _DeferralSink sink,
+  ) async {
+    final existing = mode == ConflictMode.lww
+        ? {
+            for (final r in await _db.select(_db.rockScans).get())
+              r.id: r.updatedAt,
+          }
+        : const <String, int>{};
+    final wallIds = await _existingIds('walls');
+
+    for (final json in rows) {
+      final scan = db.RockScanRow.fromJson(_notDirty(json));
+      if (mode == ConflictMode.lww &&
+          !_shouldWriteLww(
+            localUpdatedAt: existing[scan.id],
+            incomingUpdatedAt: scan.updatedAt,
+          )) {
+        continue;
+      }
+      final missing = _firstMissingFk([('wallId', scan.wallId, wallIds)]);
+      if (missing != null) {
+        sink.defer(
+          table: 'rock_scans',
+          id: scan.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
+      await _db.into(_db.rockScans).insertOnConflictUpdate(scan);
     }
   }
 

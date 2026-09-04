@@ -1843,6 +1843,11 @@ void main() {
           // A synced table like its parent: the line is the contributor's
           // own work and travels with the rest of their library.
           'route_lines',
+          // A video capture of the rock and the 3D reconstruction made from
+          // it (v17). Synced, but with two writers: the client owns the
+          // capture half and the reconstruction worker owns the result half,
+          // which the push strips (`serverOwnedSyncColumns`).
+          'rock_scans',
           'comments',
           'likes',
           'ascents',
@@ -2614,6 +2619,153 @@ void main() {
     );
   });
 
+  group('v16 -> v17 migration (rock scans)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v17_migration_');
+      dbFile = File(p.join(tempDir.path, 'v16.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    /// Builds a real database at the CURRENT schema, then rewinds it to the
+    /// v16 shape on disk: drops the v17 table and stamps `user_version`.
+    Future<void> makeV16Database() async {
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.into(fresh.areas).insert(
+            AreasCompanion.insert(
+              id: 'area-v16',
+              createdAt: 100,
+              updatedAt: 100,
+              name: 'Pre-v17 Area',
+            ),
+          );
+      await fresh.close();
+
+      final raw = sqlite3lib.sqlite3.open(dbFile.path);
+      raw.execute('DROP TABLE rock_scans; PRAGMA user_version = 16;');
+      expect(raw.select('PRAGMA user_version;').first.values.first, 16);
+      raw.close();
+    }
+
+    test('adds rock_scans to an existing v16 database without losing rows',
+        () async {
+      await makeV16Database();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      final area = await (db.select(db.areas)
+            ..where((t) => t.id.equals('area-v16')))
+          .getSingle();
+      expect(
+        area.name,
+        'Pre-v17 Area',
+        reason: 'pre-existing row must survive the v16 -> v17 migration',
+      );
+
+      final tables = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'",
+          )
+          .map((row) => row.read<String>('name'))
+          .get();
+      expect(tables, contains('rock_scans'));
+    });
+
+    test('a library with no scans is the normal state after migrating',
+        () async {
+      // The whole point of the feature being additive: nothing a climber can
+      // already read depends on this table, so an empty one is correct
+      // rather than a half-migrated state needing a backfill.
+      await makeV16Database();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      expect(await db.select(db.rockScans).get(), isEmpty);
+    });
+
+    test('the new table is usable immediately, with both defaults set',
+        () async {
+      await makeV16Database();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      // A wall to hang it off: `RockScans.wallId` is a real FK and
+      // `PRAGMA foreign_keys = ON`.
+      await db.into(db.sectors).insert(
+            SectorsCompanion.insert(
+              id: 'sector-v17',
+              createdAt: 100,
+              updatedAt: 100,
+              areaId: 'area-v16',
+              name: 'S',
+              sortOrder: 0,
+            ),
+          );
+      await db.into(db.walls).insert(
+            WallsCompanion.insert(
+              id: 'wall-v17',
+              createdAt: 100,
+              updatedAt: 100,
+              sectorId: 'sector-v17',
+              name: 'W',
+              sortOrder: 0,
+            ),
+          );
+      await db.into(db.rockScans).insert(
+            RockScansCompanion.insert(
+              id: 'scan-v17',
+              createdAt: 100,
+              updatedAt: 100,
+              wallId: 'wall-v17',
+            ),
+          );
+
+      final scan = await db.select(db.rockScans).getSingle();
+      expect(
+        scan.uploadState,
+        'pending',
+        reason: 'a scan starts on the device, which is where a climber '
+            'records it — at a crag, usually with no signal',
+      );
+      expect(
+        scan.status,
+        'pending',
+        reason: 'nothing has reconstructed it yet, and only the worker may '
+            'ever say otherwise',
+      );
+      expect(scan.cloudObjectPath, isNull);
+      expect(scan.manifestJson, isNull);
+    });
+
+    test('rock_scans carries the full SyncColumns set', () async {
+      await makeV16Database();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      final columns = await db
+          .customSelect("PRAGMA table_info('rock_scans')")
+          .map((row) => row.read<String>('name'))
+          .get();
+
+      // Unlike the community-fact mirror tables, a scan IS the contributor's
+      // own work and travels with the rest of their library.
+      expect(columns, contains('dirty'));
+      expect(columns, contains('owner_id'));
+      expect(columns, contains('remote_id'));
+      expect(columns, contains('deleted_at'));
+    });
+  });
+
   group('v14 -> v15 migration (comment mentions + notifications)', () {
     late Directory tempDir;
     late File dbFile;
@@ -2859,7 +3011,7 @@ void main() {
 
         // The recovery actually STICKS: the version is stamped, so the next
         // open is an ordinary no-migration open rather than another retry.
-        expect(await userVersion(db), 16);
+        expect(await userVersion(db), 17);
 
         // And a re-added column is wired into the generated companion, not
         // merely physically present in SQLite.
@@ -3044,7 +3196,7 @@ void main() {
         expect(ascent.visibility, 'public');
         expect(ascent.authorName, isNull);
 
-        expect(await userVersion(db), 16);
+        expect(await userVersion(db), 17);
       },
     );
 
@@ -3142,7 +3294,7 @@ void main() {
         expect(photo.isPrimary, isTrue);
         expect(photo.sortOrder, 0);
 
-        expect(await userVersion(db), 16);
+        expect(await userVersion(db), 17);
       },
     );
   });

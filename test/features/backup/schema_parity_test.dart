@@ -140,6 +140,15 @@ void main() {
       pointsJson: '[]',
       symbolsJson: '[]',
     ).toJson().keys.toSet(),
+    'rock_scans': const RockScanRow(
+      id: 'scan1',
+      createdAt: 0,
+      updatedAt: 0,
+      dirty: false,
+      wallId: 'w1',
+      uploadState: 'pending',
+      status: 'pending',
+    ).toJson().keys.toSet(),
     'ascents': const Ascent(
       id: 'as1',
       createdAt: 0,

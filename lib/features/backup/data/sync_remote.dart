@@ -49,6 +49,9 @@ const List<String> syncTableNames = [
   // pushed in order, so a line can never reach the cloud before the climb it
   // depicts or the photo it is drawn on.
   'route_lines',
+  // Only needs 'walls', so its position is free; kept with the topo tables
+  // rather than at the end because that is where a reader looks for it.
+  'rock_scans',
   'ascents',
   'comments',
   'likes',
@@ -847,6 +850,11 @@ const Map<String, List<String>> syncRequiredFields = {
     'pointsJson',
     'symbolsJson',
   ],
+  // `uploadState` and `status` are NOT NULL but carry Drift defaults, so by
+  // this map's own stated rule they are excluded — and they must be, because
+  // `status` is stripped from every pushed row (see [serverOwnedSyncColumns])
+  // and requiring it here would reject every scan the guard ever saw.
+  'rock_scans': ['id', 'createdAt', 'updatedAt', 'wallId'],
   'ascents': ['id', 'createdAt', 'updatedAt', 'routeId', 'wallId', 'climbedAt', 'style', 'visibility'],
   'comments': ['id', 'createdAt', 'updatedAt', 'body'],
   'likes': ['id', 'createdAt', 'updatedAt'],
@@ -1017,6 +1025,65 @@ Map<String, List<Map<String, dynamic>>> consistentSharedAscentBatch(
 /// regardless (see its `_notDirty`). Neither name appears in
 /// [syncRequiredFields], so stripping can never trip the NOT-NULL guard.
 const Set<String> localOnlySyncColumns = {'dirty', 'remoteId'};
+
+/// Per-table columns the BACKEND owns, which a client must therefore never
+/// include in a pushed row.
+///
+/// [localOnlySyncColumns] above is the global version of this idea — columns
+/// stripped from every table because they are per-device bookkeeping. This
+/// map is the table-scoped one: the column exists on the cloud row and is
+/// meaningful there, but the authoritative writer is a server-side process,
+/// not the app.
+///
+/// ## Why stripping is the right mechanism, and not a merge rule
+///
+/// The push is a full-state re-push under last-writer-wins with local
+/// winning ties (`shouldPushLww`). For a column only the client writes that
+/// is exactly correct. For a column the SERVER writes it is exactly wrong: a
+/// phone that has not pulled since a job finished would push its stale
+/// `status: 'pending'` over the worker's `status: 'ready'` and lose the
+/// result — and, with no outbox to replay from, lose it permanently.
+///
+/// Omitting the column instead is safe in both directions, for the same
+/// reason [localOnlySyncColumns] is: an INSERT that omits it takes the
+/// Postgres default, and an `ON CONFLICT DO UPDATE` that omits it leaves the
+/// stored value untouched. The client still READS these columns — they
+/// arrive on every pull like any other — it simply never writes them back.
+///
+/// ## Adding a table here
+///
+/// The strip is applied centrally, inside `SyncService.pushOwn`'s `guard()`,
+/// which every pushed row of every table already passes through. So adding
+/// an entry here is sufficient; there is no second call site to remember.
+/// Nothing in here may appear in [syncRequiredFields] for the same table, or
+/// the guard would reject every row for missing the field it just removed —
+/// `test/features/backup/data/supabase_sync_remote_test.dart` asserts that
+/// those two maps cannot contradict each other.
+const Map<String, Set<String>> serverOwnedSyncColumns = {
+  'rock_scans': {
+    'status',
+    'progressPct',
+    'cloudObjectPath',
+    'manifestJson',
+    'failureReason',
+  },
+};
+
+/// [row] without any column the backend owns for [table].
+///
+/// Returns the SAME map instance when [table] has no server-owned columns —
+/// which is every table but one — so the overwhelmingly common path costs
+/// nothing. Callers must therefore not mutate the result in place.
+Map<String, dynamic> stripServerOwnedSyncColumns(
+  String table,
+  Map<String, dynamic> row,
+) {
+  final owned = serverOwnedSyncColumns[table];
+  if (owned == null || owned.isEmpty) return row;
+  final stripped = Map<String, dynamic>.of(row);
+  stripped.removeWhere((key, _) => owned.contains(key));
+  return stripped;
+}
 
 /// [row] without any [localOnlySyncColumns] key. Returns a COPY — the caller
 /// still holds the original `toJson()` map, and `SyncService.pushOwn` relies

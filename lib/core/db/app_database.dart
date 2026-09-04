@@ -24,6 +24,7 @@ part 'app_database.g.dart';
     Photos,
     Routes,
     RouteLines,
+    RockScans,
     Comments,
     Likes,
     Ascents,
@@ -52,7 +53,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -543,6 +544,25 @@ class AppDatabase extends _$AppDatabase {
         await addIfMissing(photos, photos.layoutPinnedT);
         await m.createTable(routeLines);
         await _renumberRoutesPerWall(m);
+      }
+      // v16 -> v17: rock scans — the video a climber records at the crag and
+      // the 3D reconstruction made from it.
+      //
+      // One brand-new table with nothing to backfill, so the same plain
+      // `createTable` shape as the v13 -> v14 and v15 -> v16 additions. No
+      // column is added to any existing table, and nothing already stored
+      // changes meaning: a library with no scans is simply a library where
+      // this table is empty, which is also every library the moment after
+      // this migration runs.
+      //
+      // Note for whoever adds the NEXT scan column: the server-owned half of
+      // this table (`status`, `progressPct`, `cloudObjectPath`,
+      // `manifestJson`, `failureReason`) must also be added to
+      // `serverOwnedSyncColumns` in `sync_remote.dart`, or a client will
+      // push its stale copy over the worker's result. See `RockScans`' own
+      // doc for why the split exists.
+      if (from < 17) {
+        await m.createTable(rockScans);
       }
     },
     beforeOpen: (details) async {
