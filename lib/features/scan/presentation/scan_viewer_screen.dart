@@ -6,6 +6,7 @@ import '../../../core/db/app_database.dart' as db;
 import '../application/rock_scan_providers.dart';
 import '../domain/rock_scan_manifest.dart';
 import '../domain/rock_scan_status.dart';
+import 'point_cloud_view.dart';
 
 /// One scan's 3D model, and what to say when there isn't one yet.
 ///
@@ -167,8 +168,9 @@ class ScanViewerScreen extends ConsumerWidget {
   }
 
   Widget _ready(WidgetRef ref, MasiColors colors, db.RockScanRow scan) {
-    final bytes = ref.watch(rockScanCloudBytesProvider(scan.id));
-    return bytes.when(
+    final manifest = RockScanManifest.tryParse(scan.manifestJson);
+    final cloud = ref.watch(rockScanPointCloudProvider(scan.id));
+    return cloud.when(
       loading: () => _Message(
         icon: Icons.view_in_ar_outlined,
         title: 'Loading the model',
@@ -186,42 +188,29 @@ class ScanViewerScreen extends ConsumerWidget {
         colors: colors,
       ),
       data: (data) {
-        if (data == null || data.isEmpty) {
+        if (data == null) {
+          // Covers both "the object is not there" and "the bytes are not a
+          // cloud we can read" — from the climber's side those are the same
+          // situation, and neither is worth a different instruction.
           return _Message(
             icon: Icons.cloud_off_outlined,
-            title: 'The model is not on the server',
+            title: 'The model could not be opened',
             detail:
-                'The row says it is ready, but its file is gone. Capture the '
-                'wall again to rebuild it.',
+                'The scan is marked ready, but its file is missing or '
+                'unreadable. Capture the wall again to rebuild it.',
             colors: colors,
           );
         }
-        return _PlaceholderCloud(colors: colors, byteCount: data.length);
+        return PointCloudView(
+          key: const Key('scan-point-cloud'),
+          cloud: data,
+          // Null unless the reconstruction genuinely recovered scale, in
+          // which case the view shows a measurement and otherwise shows none.
+          metresPerUnit: manifest?.metresPerUnit,
+        );
       },
     );
   }
-}
-
-/// Temporary stand-in for the point-cloud renderer, which lands separately.
-///
-/// Deliberately says what it is rather than pretending to be a viewer: it
-/// proves the bytes arrived and how many there are, which is exactly the fact
-/// worth having before there is anything to draw them with.
-class _PlaceholderCloud extends StatelessWidget {
-  const _PlaceholderCloud({required this.colors, required this.byteCount});
-
-  final MasiColors colors;
-  final int byteCount;
-
-  @override
-  Widget build(BuildContext context) => _Message(
-    icon: Icons.view_in_ar,
-    title: 'Model downloaded',
-    detail:
-        '${(byteCount / (1024 * 1024)).toStringAsFixed(1)} MB of point cloud. '
-        'The 3D view lands in the next change.',
-    colors: colors,
-  );
 }
 
 class _Message extends StatelessWidget {
