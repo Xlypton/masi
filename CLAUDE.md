@@ -241,6 +241,57 @@ explicit `-t`, and `tool/build_web.sh` greps the emitted bundle for `e2e@masi.te
 it appears. Build it to `-o build/web_e2e`, never over `build/web` (what the deploy skill ships). If you
 ever touch that gate, keep it.
 
+## Rock scans — 3D capture (added 2026-09-04)
+
+A climber records a slow pass across a face; a worker reconstructs a point cloud; the app draws it.
+`lib/features/scan/` (Dart) + `tool/rock_scan_worker/` (Python, ffmpeg + COLMAP). Live table
+`public.rock_scans` and Storage bucket `rock-scans` are applied and verified.
+
+**Nothing here is load-bearing for the topo.** A wall with no scan, a scan still processing and a
+scan that failed are all ordinary states; `Walls.baselineJson` and the face layout are computed with
+no reference to this table. Deleting every row changes nothing a climber can read. Keep it that way —
+the point of the separation is that the topo works when reconstruction does not.
+
+**One row, TWO writers — the thing to get right.** The app owns `wallId`, `uploadState`,
+`videoObjectPath`, `durationMs`, `sizeBytes`; the worker (service_role, so RLS does not apply to it)
+owns `status`, `progressPct`, `cloudObjectPath`, `manifestJson`, `failureReason`. The push is a
+full-state re-push under LWW with local winning ties, so a phone that has not pulled since a job
+finished would otherwise send its stale `status: 'pending'` over the worker's `'ready'` — and with no
+outbox (D-4), lose it permanently. The push therefore STRIPS the worker's columns, centrally, inside
+`SyncService.pushOwn`'s `guard()` closure, driven by `serverOwnedSyncColumns` in `sync_remote.dart`.
+
+- **Adding a worker-written column means adding it to `serverOwnedSyncColumns` too.** Nothing fails
+  loudly if you forget: the client just clobbers the value on its next push. A Python test parses
+  that map out of `sync_remote.dart` and fails if the two sides diverge; keep it working.
+- Omitting a column is safe both ways — INSERT takes the Postgres default, `ON CONFLICT DO UPDATE`
+  leaves the stored value untouched. That is the same property `localOnlySyncColumns` relies on.
+
+**The queue needs no trigger and no server state machine.** A scan is claimable exactly when
+`uploadState = 'uploaded' AND status = 'pending'` — derived from the column the CLIENT owns, so a
+half-uploaded video can never be picked up. Claiming is a conditional UPDATE; zero rows affected
+means another worker won.
+
+**Never invent a number.** No upload percentage (the Supabase Dart client exposes no progress
+callback), no reconstruction ETA (nothing on the device knows the worker's queue), and **no
+measurement at all unless `manifest.metresPerUnit` is non-null** — structure-from-motion recovers
+geometry only up to a similarity transform, so an arbitrary-scale cloud genuinely does not know how
+big the rock is. `test/features/scan/domain/colmap_contract_test.dart` pins this against real worker
+output.
+
+**The worker runs on the user's Windows box** (`C:\Projects\masi`, NVIDIA GPU), started by hand.
+It POLLS — no inbound port, no public IP, no firewall change — so a home machine behind NAT is a
+perfectly good host. `tool/rock_scan_worker/README.md` is the setup. Reconstruction sits behind one
+replaceable interface so the SIFT front-end can later be swapped for learned features (hloc/glomap)
+without touching the queue, storage, schema or CLI.
+
+**Verified in this container:** COLMAP 3.9.1 + ffmpeg reconstruct a synthetic scene end to end, and
+the Dart parser reads that real PLY and agrees with the worker's own Python-computed bounds.
+**Not verified anywhere:** the CUDA path, dense MVS, Windows itself, and the Dockerfile.
+
+**Known gap:** capture needs a connection. The video is not persisted locally, so recording at a crag
+with no signal leaves the scan on the device with nothing to retry from. Offline capture needs a
+video store with a web/native seam and an eviction policy — deliberately deferred, not overlooked.
+
 ## Web offline stack
 
 The web build has a full offline story now, not just a wasm-compilable one — this is easy to miss because
