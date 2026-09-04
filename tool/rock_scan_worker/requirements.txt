@@ -1,0 +1,10 @@
+# Runtime dependencies. Deliberately three, all pure-wheel on Windows:
+# `pip install -r requirements.txt` on a fresh gaming PC must not need a
+# compiler, and every heavyweight step (SfM, video decoding) is an external
+# binary rather than a Python extension.
+requests>=2.31,<3
+numpy>=1.26,<3
+Pillow>=10.2,<12
+
+# Tests only: pytest. Install with
+#   pip install -r requirements.txt pytest
