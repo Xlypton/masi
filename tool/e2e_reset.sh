@@ -81,6 +81,13 @@ DELETE FROM public.ascents  WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_
 DELETE FROM public.route_lines     WHERE \"ownerId\" IN ($UIDS) OR \"routeId\" IN ($E2E_ROUTES) OR \"photoId\" IN ($E2E_PHOTOS);
 DELETE FROM public.routes          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.photos          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
+-- rock_scans before walls: it points at wallId and, like route_lines,
+-- carries no server-side FK, so a surviving row would be an invisible
+-- orphan rather than a loud constraint violation. No suite captures a
+-- scan yet, but the sweep predates that for the same reason
+-- route_lines' did: the table that gets forgotten is always the one
+-- nothing happened to be writing to at the time.
+DELETE FROM public.rock_scans      WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.wall_moderation WHERE \"wallId\"  IN ($E2E_WALLS);
 DELETE FROM public.walls           WHERE \"ownerId\" IN ($UIDS);
 DELETE FROM public.sectors         WHERE \"ownerId\" IN ($UIDS);
@@ -107,6 +114,28 @@ if [[ -n "$SERVICE_KEY" && "$SERVICE_KEY" != "null" ]]; then
     while IFS= read -r obj; do [[ -n "$obj" ]] && TO_DELETE+=("$obj"); done < <(list_prefix "$u")
   done
   TO_DELETE+=("shared/${E2E_PHOTO_PUBLISHED}.png" "shared/${E2E_PHOTO_PENDING}.png")
+
+  # Scan videos and reconstructions live in their OWN bucket, and every object
+  # in it sits under an owner-uid prefix — there is no shared/ equivalent, so
+  # the three owner prefixes are the whole of it.
+  SCAN_DELETE=()
+  for u in "$E2E_OWNER_UID" "$E2E_READER_UID" "$E2E_ADMIN_UID"; do
+    while IFS= read -r obj; do
+      [[ -n "$obj" ]] && SCAN_DELETE+=("$obj")
+    done < <(
+      curl -sS -X POST "${SUPABASE_URL}/storage/v1/object/list/rock-scans" \
+        -H "Authorization: Bearer ${SERVICE_KEY}" -H "Content-Type: application/json" \
+        --data "$(jq -n --arg p "$u" '{prefix:$p, limit:1000, offset:0}')" \
+        | jq -r --arg p "$u" '.[]? | select(.name != null) | "\($p)/\(.name)"'
+    )
+  done
+  if [[ ${#SCAN_DELETE[@]} -gt 0 ]]; then
+    SCAN_REMOVED="$(curl -sS -X DELETE "${SUPABASE_URL}/storage/v1/object/rock-scans" \
+      -H "Authorization: Bearer ${SERVICE_KEY}" -H "Content-Type: application/json" \
+      --data "$(printf '%s\n' "${SCAN_DELETE[@]}" | jq -R . | jq -sc '{prefixes: .}')" \
+      | jq -r 'if type=="array" then length else 0 end')"
+    echo "    removed $SCAN_REMOVED scan object(s)"
+  fi
   if [[ ${#TO_DELETE[@]} -gt 0 ]]; then
     REMOVED="$(curl -sS -X DELETE "${SUPABASE_URL}/storage/v1/object/${PHOTO_BUCKET}" \
       -H "Authorization: Bearer ${SERVICE_KEY}" -H "Content-Type: application/json" \
@@ -136,6 +165,7 @@ LEFTOVER="$(sql "SELECT
 + (SELECT count(*) FROM public.walls   WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.routes  WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.route_lines WHERE \"ownerId\" IN ($UIDS))
++ (SELECT count(*) FROM public.rock_scans WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.photos  WHERE \"ownerId\" IN ($UIDS))
 + (SELECT count(*) FROM public.content_reports WHERE \"reporterId\" IN ($UIDS))
 + (SELECT count(*) FROM public.topo_edit_suggestions WHERE \"authorId\" IN ($UIDS)) AS n;" \
