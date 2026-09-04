@@ -85,8 +85,15 @@ void main() {
       );
       await binding.takeScreenshot('30-wall-scans-ready');
 
+      // Scoped to THIS tile, not a bare `find.text`. A wall may hold several
+      // scans, and a global text finder then matches every ready one and
+      // fails on `findsOneWidget` — a harness defect that reads exactly like
+      // a product bug, which is the kind this suite is least able to afford.
       expect(
-        find.text('3D model ready'),
+        find.descendant(
+          of: find.byKey(const Key('scan-tile-$kE2eScanId')),
+          matching: find.text('3D model ready'),
+        ),
         findsOneWidget,
         reason:
             'the worker set status=ready, so the tile must say so — a scan '
