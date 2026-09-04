@@ -83,10 +83,12 @@ DELETE FROM public.routes          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN
 DELETE FROM public.photos          WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 -- rock_scans before walls: it points at wallId and, like route_lines,
 -- carries no server-side FK, so a surviving row would be an invisible
--- orphan rather than a loud constraint violation. `tool/rock_scan_e2e.sh`
+-- orphan rather than a loud constraint violation. tool/rock_scan_e2e.sh
 -- now writes here for real, against the live worker; the sweep predated
 -- that, for the same reason route_lines' did — the table that gets
 -- forgotten is always the one nothing happened to be writing to yet.
+-- (No backticks anywhere in this string: it is double-quoted, so a
+-- backtick runs a command and splices its output into the SQL.)
 DELETE FROM public.rock_scans      WHERE \"ownerId\" IN ($UIDS) OR \"wallId\" IN ($E2E_WALLS);
 DELETE FROM public.wall_moderation WHERE \"wallId\"  IN ($E2E_WALLS);
 DELETE FROM public.walls           WHERE \"ownerId\" IN ($UIDS);
