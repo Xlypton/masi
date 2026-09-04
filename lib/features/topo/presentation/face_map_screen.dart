@@ -152,6 +152,16 @@ class _FaceMapScreenState extends ConsumerState<FaceMapScreen> {
             ],
           ),
         ),
+        // 3D scans live beside the plan view because both are about the
+        // ROCK rather than about what is drawn on a photo of it. Shown to
+        // readers too: looking at somebody else's model is fine, and the
+        // scans screen decides for itself what a non-owner may do there.
+        IconButton(
+          key: const Key('face-map-scans'),
+          tooltip: '3D scans',
+          icon: Icon(Icons.view_in_ar_outlined, color: colors.accent),
+          onPressed: () => context.push('/walls/${widget.wallId}/scans'),
+        ),
         if (!widget.readOnly)
           TextButton.icon(
             key: const Key('face-map-edit'),
