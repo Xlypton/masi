@@ -22,6 +22,17 @@ HEADLESS_NO_CUDA_STDERR = (
     "*** SIGABRT (@0x31c7) received by PID 12743\n"
 )
 
+#: Verbatim from a real COLMAP 4.2.0 (CUDA) run on Windows, passed the pre-4.0
+#: flag name. COLMAP 4.0 renamed `--Sift{Extraction,Matching}.use_gpu` to
+#: `--Feature{Extraction,Matching}.use_gpu` when it added non-SIFT extractors
+#: (ALIKED, LoMa) — this is a version-skew CLI break, not a missing GPU, and
+#: retrying on CPU would fail identically because it is the same unrecognised
+#: flag either way.
+WINDOWS_COLMAP4_UNRECOGNISED_OPTION_STDERR = (
+    "E20260904 20:35:20.298997  6848 base_option_manager.cc:265] "
+    "Failed to parse options - unrecognised option '--SiftExtraction.use_gpu'.\n"
+)
+
 
 def result(returncode: int, stderr: str = "") -> CommandResult:
     return CommandResult(args=("colmap",), returncode=returncode, stdout="", stderr=stderr)
@@ -44,6 +55,14 @@ def test_does_not_mistake_a_real_error_for_a_missing_gpu():
     assert not _looks_like_gpu_failure(result(1, "ERROR: Failed to read image frame_00007.jpg"))
 
 
+def test_an_unrecognised_option_is_not_mistaken_for_a_missing_gpu():
+    """The pre-4.0 flag name against a 4.x binary is a CLI version mismatch,
+    not a GPU problem — falling back to CPU here would just repeat the same
+    unrecognised-option error, so this must raise TransientError instead of
+    triggering the (useless) CPU retry."""
+    assert not _looks_like_gpu_failure(result(1, WINDOWS_COLMAP4_UNRECOGNISED_OPTION_STDERR))
+
+
 def build(monkeypatch, gpu: str, outcomes: list[CommandResult]) -> tuple[ColmapReconstructor, list[list[str]], list[str]]:
     calls: list[list[str]] = []
     logs: list[str] = []
@@ -60,7 +79,13 @@ def build(monkeypatch, gpu: str, outcomes: list[CommandResult]) -> tuple[ColmapR
 
     monkeypatch.setattr(colmap_module, "run", fake_run)
     config = Config(supabase_url="", gpu=gpu)
-    return ColmapReconstructor(config, log=logs.append), calls, logs
+    reconstructor = ColmapReconstructor(config, log=logs.append)
+    # Pin to a pre-4.0 version so every test below — none of which is about
+    # flag-name selection — gets the legacy `Sift*.use_gpu` names without an
+    # extra `colmap -h` call (and thus an extra, unexpected `run()` call)
+    # sneaking into `calls`. See test_gpu_flag_name_* for the thing this skips.
+    reconstructor._version = "3.9.1"
+    return reconstructor, calls, logs
 
 
 def request(tmp_path) -> ReconstructionRequest:
@@ -144,3 +169,47 @@ def test_a_cpu_fallback_is_not_recorded_as_a_gpu_run(monkeypatch, tmp_path):
     assert reconstructor._used_gpu is False, (
         "the work was done on the CPU, however much the GPU was wanted"
     )
+
+
+@pytest.mark.parametrize(
+    "version, extraction_flag, matching_flag",
+    [
+        ("3.9.1", "SiftExtraction.use_gpu", "SiftMatching.use_gpu"),
+        ("4.2.0", "FeatureExtraction.use_gpu", "FeatureMatching.use_gpu"),
+        # A version colmap has not shipped yet must still resolve — the
+        # comparison is ">= 4.0.0", not "== a version we have seen".
+        ("5.0.0", "FeatureExtraction.use_gpu", "FeatureMatching.use_gpu"),
+    ],
+)
+def test_gpu_flag_name_matches_the_installed_colmap_version(
+    monkeypatch, tmp_path, version, extraction_flag, matching_flag
+):
+    """The actual bug: COLMAP 4.0 renamed `Sift*.use_gpu` to `Feature*.use_gpu`
+    when it added non-SIFT extractors (ALIKED, LoMa). A worker hard-coded to
+    the pre-4.0 name gets `unrecognised option` on a fresh 4.x Windows install
+    and TransientError on every attempt — CPU fallback does not help, because
+    it is the same unrecognised flag regardless of the value passed."""
+    reconstructor, calls, _ = build(monkeypatch, "auto", [result(0)])
+    reconstructor._version = version
+
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+    assert f"--{extraction_flag}" in calls[0]
+
+    calls.clear()
+    reconstructor._matcher(tmp_path / "db", request(tmp_path))
+    assert f"--{matching_flag}" in calls[0]
+
+
+def test_gpu_flag_name_falls_back_to_legacy_when_version_is_unknown(monkeypatch, tmp_path):
+    """`colmap -h` failing to yield a parseable version must not crash flag
+    selection — it should behave exactly as it always has (pre-4.0 names).
+
+    `outcomes[0]` serves the `version()` probe this triggers (empty
+    stdout/stderr, so no version parses out of it); `outcomes[1]` serves the
+    real `feature_extractor` call.
+    """
+    reconstructor, calls, _ = build(monkeypatch, "auto", [result(1), result(0)])
+    reconstructor._version = None  # undo the pin `build()` sets, to force the probe
+
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+    assert "--SiftExtraction.use_gpu" in calls[-1]

@@ -40,6 +40,14 @@ _GPU_FAILURE_MARKERS = (
     "could not create opengl context",
     "display",
     "siftgpu",
+    # A prebuilt COLMAP CUDA release only embeds kernels for the compute
+    # capabilities it targeted at build time (typically Turing+); an older
+    # card the build dropped (e.g. Pascal / sm_61, a GTX 10-series) gets this
+    # verbatim, once per CUDA call, with no mention of "cuda" anywhere in it —
+    # and `feature_extractor` still exits 0, having silently processed zero
+    # images. See `_run_step`: the marker check has to run even on success,
+    # or this exact failure is invisible to it.
+    "no kernel image is available",
 )
 
 #: Below this many SIFT keypoints on a typical frame, the rock simply has no
@@ -89,6 +97,20 @@ class ColmapReconstructor:
         match = re.search(r"COLMAP\s+([0-9][^\s,;]*)", result.stdout + result.stderr)
         self._version = match.group(1) if match else None
         return self._version
+
+    def _uses_feature_prefixed_gpu_options(self) -> bool:
+        """COLMAP 4.0 added non-SIFT extractors/matchers (ALIKED, LoMa) and, as
+        part of that, renamed `--Sift{Extraction,Matching}.use_gpu` to
+        `--Feature{Extraction,Matching}.use_gpu`. The pre-4.0 name is now an
+        "unrecognised option" — not a GPU failure, so `_looks_like_gpu_failure`
+        correctly does not catch it and the CPU fallback would not help either,
+        since it passes the same unrecognised flag. Picking the option family
+        from the installed binary's own version is what lets the same code run
+        against the Linux 3.9.x fleet and a freshly-installed Windows 4.x build.
+        """
+        version = self.version()
+        parsed = _parse_version(version) if version else None
+        return parsed is not None and parsed >= (4, 0, 0)
 
     # -- the work -----------------------------------------------------------
 
@@ -176,6 +198,12 @@ class ColmapReconstructor:
     # -- steps --------------------------------------------------------------
 
     def _feature_extractor(self, database: Path, request: ReconstructionRequest) -> None:
+        gpu_flag = (
+            "FeatureExtraction.use_gpu"
+            if self._uses_feature_prefixed_gpu_options()
+            else "SiftExtraction.use_gpu"
+        )
+
         def build(gpu: bool) -> list[str]:
             return [
                 self._config.colmap_bin,
@@ -191,7 +219,7 @@ class ColmapReconstructor:
                 "1",
                 "--ImageReader.camera_model",
                 "OPENCV",
-                "--SiftExtraction.use_gpu",
+                f"--{gpu_flag}",
                 "1" if gpu else "0",
             ]
 
@@ -199,6 +227,11 @@ class ColmapReconstructor:
 
     def _matcher(self, database: Path, request: ReconstructionRequest) -> None:
         exhaustive = request.frame_count <= EXHAUSTIVE_MATCH_LIMIT
+        gpu_flag = (
+            "FeatureMatching.use_gpu"
+            if self._uses_feature_prefixed_gpu_options()
+            else "SiftMatching.use_gpu"
+        )
 
         def build(gpu: bool) -> list[str]:
             if exhaustive:
@@ -207,7 +240,7 @@ class ColmapReconstructor:
                     "exhaustive_matcher",
                     "--database_path",
                     str(database),
-                    "--SiftMatching.use_gpu",
+                    f"--{gpu_flag}",
                     "1" if gpu else "0",
                 ]
             # Video frames arrive in temporal order, so neighbours in the
@@ -222,7 +255,7 @@ class ColmapReconstructor:
                 "10",
                 "--SequentialMatching.quadratic_overlap",
                 "1",
-                "--SiftMatching.use_gpu",
+                f"--{gpu_flag}",
                 "1" if gpu else "0",
             ]
 
@@ -340,7 +373,16 @@ class ColmapReconstructor:
             timeout_s=self._config.subprocess_timeout_s,
             log=self._log,
         )
-        if result.ok:
+        # A CUDA kernel/architecture mismatch (e.g. a prebuilt release that
+        # dropped this card's compute capability) makes every per-image CUDA
+        # call fail, but COLMAP treats that as a per-image warning, not a
+        # fatal error — feature_extractor still exits 0 having processed zero
+        # images. So a "successful" GPU run has to be checked for this too,
+        # not just a failed one, or it is indistinguishable from a real (if
+        # textureless) video until the mapper fails much later with a far
+        # less specific "no 3D shape" error.
+        gpu_silently_failed = want_gpu and result.ok and _looks_like_gpu_failure(result)
+        if result.ok and not gpu_silently_failed:
             if want_gpu:
                 self._used_gpu = True
             return result
@@ -375,6 +417,12 @@ class ColmapReconstructor:
 def _looks_like_gpu_failure(result: CommandResult) -> bool:
     haystack = (result.stderr + result.stdout).lower()
     return any(marker in haystack for marker in _GPU_FAILURE_MARKERS)
+
+
+def _parse_version(version: str) -> tuple[int, ...] | None:
+    """`"4.2.0"` -> `(4, 2, 0)`. `None` for anything with no leading digits."""
+    parts = re.findall(r"\d+", version)
+    return tuple(int(p) for p in parts[:3]) if parts else None
 
 
 def _median_keypoints(database: Path) -> int | None:
