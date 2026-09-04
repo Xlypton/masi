@@ -66,6 +66,8 @@ class ColmapReconstructor:
         self._config = config
         self._log = log or (lambda _m: None)
         self._gpu_ok = config.gpu != "off"
+        #: Whether a step actually RAN on the GPU this reconstruction.
+        self._used_gpu = False
         self._version: str | None = None
 
     # -- lifecycle ----------------------------------------------------------
@@ -103,6 +105,13 @@ class ColmapReconstructor:
             f"colmap: gpu mode {self._config.gpu!r}; "
             + ("attempting GPU" if want_gpu else "running on CPU")
         )
+        # Reset per run, because this records what ACTUALLY happened rather
+        # than what was permitted. `_gpu_ok` only says the GPU has not been
+        # proven broken, so reporting it as "used" claimed a GPU run on a
+        # CPU-only one — the wrong answer in precisely the situation the
+        # field exists for, which is somebody working out why a machine's
+        # reconstructions behave differently from another's.
+        self._used_gpu = False
 
         request.progress(0.02, "extracting features")
         self._feature_extractor(database, request)
@@ -160,7 +169,7 @@ class ColmapReconstructor:
             # so is a requirement, not an omission — see base.py.
             metres_per_unit=None,
             scale_source=None,
-            used_gpu=self._gpu_ok,
+            used_gpu=self._used_gpu,
             dense_used=dense_used,
         )
 
@@ -332,6 +341,8 @@ class ColmapReconstructor:
             log=self._log,
         )
         if result.ok:
+            if want_gpu:
+                self._used_gpu = True
             return result
 
         if want_gpu and self._config.gpu == "auto" and _looks_like_gpu_failure(result):

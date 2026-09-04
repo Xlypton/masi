@@ -112,3 +112,35 @@ def test_a_non_gpu_failure_is_transient_not_a_scan_failure(monkeypatch, tmp_path
     reconstructor, _, _ = build(monkeypatch, "auto", [result(2, "ERROR: database is locked")])
     with pytest.raises(TransientError):
         reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+
+
+def test_reports_the_gpu_it_actually_used_not_the_one_it_was_allowed(monkeypatch, tmp_path):
+    """`used_gpu` is a diagnostic, so it has to be true.
+
+    It used to be reported as `_gpu_ok`, which only means "the GPU has not
+    been proven broken" — so a run that never asked for one still claimed
+    it had used it. That is the wrong answer in exactly the case the field
+    exists for: comparing a machine whose reconstructions work against one
+    whose do not.
+    """
+    reconstructor, calls, _ = build(monkeypatch, "off", [result(0)])
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+    assert calls[0][-1] == "0", "sanity: this run is CPU-only"
+    assert reconstructor._used_gpu is False
+
+
+def test_a_gpu_step_that_succeeds_is_recorded_as_one(monkeypatch, tmp_path):
+    reconstructor, calls, _ = build(monkeypatch, "auto", [result(0)])
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+    assert calls[0][-1] == "1", "sanity: this run asked for the GPU and got it"
+    assert reconstructor._used_gpu is True
+
+
+def test_a_cpu_fallback_is_not_recorded_as_a_gpu_run(monkeypatch, tmp_path):
+    reconstructor, _, _ = build(
+        monkeypatch, "auto", [result(1, HEADLESS_NO_CUDA_STDERR), result(0)]
+    )
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+    assert reconstructor._used_gpu is False, (
+        "the work was done on the CPU, however much the GPU was wanted"
+    )
