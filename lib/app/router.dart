@@ -11,6 +11,10 @@ import '../features/account/application/auth_providers.dart';
 import '../features/account/data/auth_repository.dart';
 import '../features/account/presentation/account_screen.dart';
 import '../features/ar/presentation/ar_screen.dart' deferred as ar_screen;
+import '../features/scan/presentation/scan_viewer_screen.dart'
+    deferred as scan_viewer_screen;
+import '../features/scan/presentation/wall_scans_screen.dart'
+    deferred as wall_scans_screen;
 import '../features/community/presentation/ascent_detail_screen.dart';
 import '../features/community/presentation/community_screen.dart';
 import '../features/community/presentation/community_topo_detail_screen.dart';
@@ -413,6 +417,32 @@ final appRouter = GoRouter(
         wallId: state.pathParameters['wallId']!,
         initialPhotoId: state.uri.queryParameters['photo'],
         readOnly: state.uri.queryParameters['readonly'] == '1',
+      ),
+    ),
+    // 3D scans of a wall: the list, and one model.
+    //
+    // Deferred for the same reason the AR screen is — neither belongs in the
+    // bundle a first-time visitor downloads to read a topo. The point-cloud
+    // renderer behind the second route is the heaviest thing in the feature
+    // and is reached by a minority of sessions.
+    GoRoute(
+      path: '/walls/:wallId/scans',
+      builder: (context, state) => DeferredRoute(
+        name: 'scan/wall_scans_screen',
+        load: wall_scans_screen.loadLibrary,
+        builder: (_) => wall_scans_screen.WallScansScreen(
+          wallId: state.pathParameters['wallId']!,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: '/walls/:wallId/scans/:scanId',
+      builder: (context, state) => DeferredRoute(
+        name: 'scan/scan_viewer_screen',
+        load: scan_viewer_screen.loadLibrary,
+        builder: (_) => scan_viewer_screen.ScanViewerScreen(
+          scanId: state.pathParameters['scanId']!,
+        ),
       ),
     ),
     // The AR alignment view for a wall — see ArScreen's class doc for the
