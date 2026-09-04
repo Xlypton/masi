@@ -1,0 +1,10 @@
+# Scratch space for in-flight reconstructions.
+work/
+# Never commit a credential file here; the worker reads env vars.
+.env
+.env.*
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.ply
