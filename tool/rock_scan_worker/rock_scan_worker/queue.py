@@ -361,6 +361,17 @@ class ScanQueue:
         For infrastructure trouble — our network died, COLMAP vanished, the
         process was asked to stop. The scan is fine; we just are not the ones
         finishing it right now.
+
+        Deliberately writes NO `failureReason`. Recording the transient's own
+        text here was tried and reverted: that column is a sentence rendered
+        verbatim next to a scan on a phone (see `reasons.py`), and a release
+        carries engine and network wording that has no business there. The
+        cost is that a repeatedly-failing job is not diagnosable from the
+        database alone — the detail lives on the worker's console. What makes
+        that acceptable is the release BOUND
+        (`Config.max_release_attempts`): after it, the job is marked failed
+        with a human sentence, so the climber is told something true even
+        though the operator still needs the log for the why.
         """
         updated = self._patch(
             filters={"id": f"eq.{job.id}", "status": f"eq.{STATUS_PROCESSING}"},

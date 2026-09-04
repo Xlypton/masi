@@ -12,11 +12,22 @@ The exception policy is the load-bearing part:
                      sentence the climber can act on.
 * `TransientError`-> our problem (network, missing binary, a killed
                      subprocess). Put the row back on the queue untouched;
-                     somebody finishes it later.
+                     somebody finishes it later — but only up to
+                     `Config.max_release_attempts` times, after which it is
+                     marked `failed` like anything else.
 * anything else   -> a bug in this worker. Marked `failed` with an invitation
-                     to retry, deliberately: without a retry counter in the
-                     schema, releasing an unknown crash would re-claim the
-                     same row forever and starve every scan behind it.
+                     to retry.
+
+That bound is the correction to an assumption this module used to make, and
+the reason the last case reads the way it does. Releasing an unknown crash
+was rejected because "without a retry counter in the schema" it would
+re-claim the same row forever — but `TransientError` was released with no
+counter either, and the first real cross-machine run proved the point: a
+reconstruction that failed identically every time was released, re-claimed
+within milliseconds, and retried about every thirteen seconds, forever. The
+counter turned out not to need a schema column at all; the worker process
+keeps it (see `Worker._releases`), which is enough, because the thing being
+bounded is one machine's willingness to keep trying.
 """
 
 from __future__ import annotations
@@ -138,12 +149,21 @@ def run_job(
     reconstructor: Reconstructor,
     log: Callable[[str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    attempt: int = 1,
+    final_attempt: bool = False,
 ) -> JobOutcome:
     """Reconstruct one claimed scan and publish the result.
 
     `should_stop` is polled at each checkpoint so a Ctrl-C or a service stop
     RELEASES the row instead of leaving it `processing` for two hours until
     the stale sweeper notices.
+
+    `final_attempt` turns the recoverable paths terminal. A transient fault
+    normally releases the row for somebody to retry, which is right when the
+    fault really is passing — but a fault that is actually deterministic then
+    retries forever, and the climber watches "Building the 3D model" for the
+    rest of the day. On the last attempt the same fault is written down as a
+    failure instead, so the app can say so and the video stays for a retry.
     """
     emit = log or (lambda _m: None)
     work_dir = Path(config.work_dir) / job.id
@@ -171,15 +191,13 @@ def run_job(
             job=job, outcome=OUTCOME_FAILED, reason=failure.reason, detail=failure.detail
         )
     except TransientError as transient:
-        emit(f"scan {job.id}: released back to the queue — {redact(transient)}")
-        queue.release(job)
-        outcome = JobOutcome(
-            job=job, outcome=OUTCOME_RELEASED, detail=redact(transient)
+        outcome = _release_or_give_up(
+            job, queue, transient, attempt, final_attempt, emit, "released"
         )
     except WorkerError as broken:
-        emit(f"scan {job.id}: worker error — {redact(broken)}")
-        queue.release(job)
-        outcome = JobOutcome(job=job, outcome=OUTCOME_RELEASED, detail=redact(broken))
+        outcome = _release_or_give_up(
+            job, queue, broken, attempt, final_attempt, emit, "worker error"
+        )
     except Exception:  # noqa: BLE001 - deliberate catch-all, see module doc
         emit(f"scan {job.id}: unexpected error\n{redact(traceback.format_exc())}")
         reason = reasons.unexpected()
@@ -189,6 +207,32 @@ def run_job(
         if not config.keep_work_dir and not config.dry_run:
             shutil.rmtree(work_dir, ignore_errors=True)
     return outcome
+
+
+def _release_or_give_up(
+    job: ScanJob,
+    queue: ScanQueue,
+    error: Exception,
+    attempt: int,
+    final_attempt: bool,
+    emit: Callable[[str], None],
+    label: str,
+) -> JobOutcome:
+    """Release a recoverable fault, or stop retrying it and say so.
+
+    The detail goes onto the row either way — `redact`ed, because a transient
+    fault's text can carry a URL with a token in it, and `failureReason` is
+    rendered on a phone.
+    """
+    detail = redact(error)
+    if not final_attempt:
+        emit(f"scan {job.id}: {label} on attempt {attempt} — {detail}")
+        queue.release(job)
+        return JobOutcome(job=job, outcome=OUTCOME_RELEASED, detail=detail)
+    reason = reasons.engine_kept_failing(attempt)
+    emit(f"scan {job.id}: giving up after {attempt} attempts — {detail}")
+    queue.mark_failed(job, reason)
+    return JobOutcome(job=job, outcome=OUTCOME_FAILED, reason=reason, detail=detail)
 
 
 def _execute(

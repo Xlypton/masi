@@ -270,3 +270,34 @@ def test_dry_run_touches_neither_the_row_nor_storage(seeded, config):
     # ...and the artifacts are on disk for a human to look at.
     assert (Path(dry.work_dir) / job.id / "cloud.ply").is_file()
     assert (Path(dry.work_dir) / job.id / "manifest.json").is_file()
+
+
+def test_the_last_attempt_turns_a_transient_fault_into_a_visible_failure(seeded, config):
+    """A fault that keeps happening has to stop looking like "still working".
+
+    Releasing is right while there is still a reason to think the next try
+    differs. On the last one there is not, and leaving the row `pending`
+    forever is the worst of both worlds: the climber is shown "Building the
+    3D model" indefinitely and no operator is told anything either.
+    """
+    client, queue, job = seeded
+    client.download_error = TransientError("network error: connection reset")
+
+    outcome = run_job(
+        job,
+        config=config,
+        client=client,
+        queue=queue,
+        reconstructor=FakeReconstructor(result=good_result()),
+        attempt=3,
+        final_attempt=True,
+    )
+
+    assert outcome.outcome == OUTCOME_FAILED
+    row = client.rows["scan-1"]
+    assert row["status"] == "failed", "the app must be able to say it did not work"
+    assert "3 attempts" in row["failureReason"]
+    for banned in ("network error", "connection reset", "Traceback"):
+        assert banned not in row["failureReason"], (
+            "failureReason is a sentence shown on a phone, not engine wording"
+        )

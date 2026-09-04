@@ -16,6 +16,7 @@ SAMPLE_ARGS = {
     "too_blurry": (4, 20),
     "not_enough_overlap": (12, 150),
     "too_few_points": (37,),
+    "engine_kept_failing": (3,),
 }
 
 
@@ -41,6 +42,7 @@ def test_there_is_a_sentence_for_every_failure_mode_we_map():
         "reconstruction_empty",
         "too_few_points",
         "unexpected",
+        "engine_kept_failing",
     } <= names
 
 

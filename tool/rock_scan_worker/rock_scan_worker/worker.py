@@ -20,7 +20,13 @@ from typing import Any, Callable
 
 from .config import Config, redact
 from .errors import ToolMissing, TransientError, WorkerError
-from .pipeline import JobOutcome, OUTCOME_FAILED, OUTCOME_READY, run_job
+from .pipeline import (
+    JobOutcome,
+    OUTCOME_FAILED,
+    OUTCOME_READY,
+    OUTCOME_RELEASED,
+    run_job,
+)
 from .queue import ScanQueue
 from .reconstruct.base import Reconstructor
 
@@ -58,6 +64,11 @@ class Worker:
     sleep: Callable[[float], None] = time.sleep
     stats: WorkerStats = field(default_factory=WorkerStats)
     _stopping: bool = False
+    #: How many times each scan has been released back to the queue by THIS
+    #: process. The bound this feeds (`config.max_release_attempts`) is what
+    #: stops a deterministic fault from being retried forever — see the
+    #: config field's note for the run that made it necessary.
+    _releases: dict[str, int] = field(default_factory=dict)
 
     def request_stop(self) -> None:
         """Ask the loop, and the job in flight, to wind up cleanly."""
@@ -76,9 +87,11 @@ class Worker:
         )
         if job is None:
             return None
+        attempt = self._releases.get(job.id, 0) + 1
         self.log(
             f"scan {job.id}: claimed (wall {job.wall_id}, "
             f"{(job.size_bytes or 0) / 1e6:.1f} MB video)"
+            + (f", attempt {attempt}" if attempt > 1 else "")
         )
         outcome = run_job(
             job,
@@ -88,7 +101,17 @@ class Worker:
             reconstructor=self.reconstructor,
             log=self.log,
             should_stop=lambda: self._stopping,
+            attempt=attempt,
+            final_attempt=attempt >= self.config.max_release_attempts,
         )
+        # A release is only worth counting when we mean to try again. A stop
+        # request also releases, and holding that against the scan would make
+        # a couple of Ctrl-Cs enough to have the next run give up on a job
+        # that was never actually tried.
+        if outcome.outcome == OUTCOME_RELEASED and not self._stopping:
+            self._releases[job.id] = attempt
+        else:
+            self._releases.pop(job.id, None)
         self.stats.record(outcome)
         self.log(f"scan {job.id}: {outcome.outcome}")
         return outcome
@@ -127,6 +150,14 @@ class Worker:
             backoff = 0.0
             if outcome is None:
                 self.stats.idle_polls += 1
+                self._nap(self.config.poll_interval_s)
+            elif outcome.outcome == OUTCOME_RELEASED:
+                # Wait before trying again. The loop used to fall straight
+                # through here, so a released job was re-claimed by the same
+                # worker within milliseconds and the retry never got the
+                # chance to be transient — which is how a failing scan turned
+                # into a 13-second cycle that re-downloaded the video and
+                # re-ran the engine indefinitely.
                 self._nap(self.config.poll_interval_s)
         return self.stats
 

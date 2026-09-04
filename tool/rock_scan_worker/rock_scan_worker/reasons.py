@@ -100,3 +100,11 @@ def unexpected() -> str:
         "Something went wrong while building the 3D model of this scan. The "
         "video is still stored — you can try running it again."
     )
+
+
+def engine_kept_failing(attempts: int) -> str:
+    return (
+        f"The 3D model could not be built after {attempts} attempts on the "
+        "machine that processes scans. The video is still stored, so it can "
+        "be tried again once that machine is working."
+    )
