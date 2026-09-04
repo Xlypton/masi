@@ -728,4 +728,45 @@ void main() {
     },
     skip: !e2eRealSessionRequested,
   );
+
+  testWidgets(
+    'signed-in: the deferred 3D scans route loads and renders its empty state',
+    (tester) async {
+      // What this proves that no unit test can: the DEFERRED library actually
+      // loads in a real browser. `/walls/:wallId/scans` is split off the
+      // initial bundle (like AR and moderation), and a deferred import that
+      // fails to fetch its part file produces a route that resolves, builds,
+      // and then shows a spinner forever — a failure mode invisible to
+      // `flutter test`, which compiles everything into one program and never
+      // exercises `loadLibrary()` over the network at all.
+      //
+      // The empty state is the right assertion here rather than a captured
+      // scan: recording one needs the native video picker, which is an OS
+      // dialog outside Flutter that no integration test can drive (the same
+      // gap that keeps `New topo` out of these suites).
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+      appRouter.go('/walls/$kE2eDraftWallId/scans');
+      await settle(tester, frames: 40);
+      await waitFor(
+        tester,
+        find.byKey(const Key('scan-capture-button')),
+        'the 3D scans screen (deferred library never finished loading?)',
+      );
+      await binding.takeScreenshot('22-wall-scans-empty');
+
+      expect(
+        find.text('No scans yet'),
+        findsOneWidget,
+        reason: 'a wall nobody has scanned must say so, not render blank',
+      );
+      expect(
+        find.textContaining('Your topo works exactly the same'),
+        findsWidgets,
+        reason: 'the empty state must not imply the topo depends on a scan',
+      );
+    },
+    skip: !e2eRealSessionRequested,
+  );
 }
