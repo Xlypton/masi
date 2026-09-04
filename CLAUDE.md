@@ -286,7 +286,37 @@ without touching the queue, storage, schema or CLI.
 
 **Verified in this container:** COLMAP 3.9.1 + ffmpeg reconstruct a synthetic scene end to end, and
 the Dart parser reads that real PLY and agrees with the worker's own Python-computed bounds.
-**Not verified anywhere:** the CUDA path, dense MVS, Windows itself, and the Dockerfile.
+**Not verified anywhere:** the CUDA path, dense MVS, and the Dockerfile.
+
+**The cross-machine run (2026-09-04) — what it proved, and the two bugs it found.**
+`tool/rock_scan_e2e.sh` drives one job across both machines against live data: render a
+reconstructable capture, upload it and insert the row **as the E2E owner's own JWT** (never
+`service_role` — a superuser insert would bypass the very RLS under test), then follow the row.
+`integration_test/e2e_scan_test.dart` is the app half, run on its own **after** a job is ready and
+**without re-seeding**, since `e2e_seed.sh` resets first and would delete the row under test.
+
+Proven live: the owner-prefix Storage policy and `rock_scans_owner_all` both admit the app's exact
+calls; the worker claims an uploaded job within seconds; and — the load-bearing one — **a stripped
+client upsert carrying a much newer `updatedAt` leaves all five worker-owned columns byte-identical**.
+That last was measured, not assumed: `ON CONFLICT DO UPDATE` really does leave an omitted column
+alone, which is the single premise the whole two-writer split rests on.
+
+- **The worker retried one job forever.** A non-zero exit from the reconstruction engine is classed
+  `TransientError` (fair — the same frames may work on a healthy box), which RELEASED the row; the
+  loop then re-claimed it within milliseconds and failed identically, about every 13 seconds,
+  indefinitely. Nothing was written to `failureReason`, so the phone said "Building the 3D model"
+  forever and the database showed a job that looked merely un-started. Fixed with
+  `Config.max_release_attempts` (default 3, counted per worker PROCESS so a restart is a fresh
+  decision and no column is needed) plus a poll-interval wait before re-claiming. `release()` still
+  deliberately writes NO `failureReason` — that column is a sentence rendered next to a scan on a
+  phone (`reasons.py`), not a place for engine wording — so a repeatedly-failing job is diagnosable
+  only from the worker's console until the bound converts it into a real failure.
+- **Teardown could not delete a reconstruction.** A source video is flat (`<uid>/<scanId>.mp4`) but a
+  cloud is nested (`<uid>/<scanId>/cloud.ply`), and Supabase lists a nested path as a pseudo-folder
+  whose `id` is null. The sweep kept those entries and asked to delete `<uid>/<scanId>`, which is not
+  an object — so the delete silently did nothing and every PLY would have stayed in the bucket
+  forever. Invisible, because the survivor check counts DATABASE rows and those were genuinely gone.
+  `e2e_reset.sh` now descends one level, which is the whole of the layout the worker writes.
 
 **Known gap:** capture needs a connection. The video is not persisted locally, so recording at a crag
 with no signal leaves the scan on the device with nothing to retry from. Offline capture needs a
