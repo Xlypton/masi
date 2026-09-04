@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fake_supabase import FakeSupabase, make_row
 from rock_scan_worker.errors import ToolMissing, TransientError
-from rock_scan_worker.pipeline import OUTCOME_READY, JobOutcome
+from rock_scan_worker.pipeline import OUTCOME_READY, OUTCOME_RELEASED, JobOutcome
 from rock_scan_worker.queue import ScanQueue
 from rock_scan_worker.worker import MAX_BACKOFF_S, Worker
 
@@ -139,3 +139,70 @@ def test_stats_separate_failed_from_released(config, monkeypatch):
     )
     stats = worker.run_forever(max_jobs=3)
     assert (stats.ready, stats.failed, stats.released) == (1, 1, 1)
+
+
+def test_one_scan_is_not_released_forever(config, monkeypatch):
+    """The livelock guard, at the level that decides it.
+
+    A fault that is really deterministic — the engine exiting non-zero on
+    this machine for this video, every time — used to be released and
+    re-claimed indefinitely, because `TransientError` means "try again" and
+    nothing counted the tries. The first real cross-machine run did exactly
+    that, about every thirteen seconds, and from the phone the scan just said
+    "Building the 3D model" for as long as anyone cared to watch.
+
+    So the worker must raise `final_attempt` on the last permitted try, which
+    is what turns the next identical fault into a visible failure.
+    """
+    import rock_scan_worker.worker as worker_module
+
+    client = FakeSupabase([make_row("s0")])
+    queue = ScanQueue(client, config)
+    seen: list[tuple[int, bool]] = []
+
+    def record(job, **kwargs):
+        seen.append((kwargs["attempt"], kwargs["final_attempt"]))
+        # Release for real. A stub that only SAYS "released" leaves the row
+        # `processing`, so the next claim finds nothing and the loop spins on
+        # an empty queue instead of re-trying the scan — which is the thing
+        # under test.
+        queue.release(job)
+        return JobOutcome(job=job, outcome=OUTCOME_RELEASED)
+
+    monkeypatch.setattr(worker_module, "run_job", record)
+    worker = Worker(
+        config=config.with_overrides(max_release_attempts=3, poll_interval_s=0.0),
+        client=client, queue=queue, reconstructor=None,
+        log=lambda _m: None, sleep=lambda _s: None,
+    )
+    worker.run_forever(max_jobs=3)
+
+    assert seen == [(1, False), (2, False), (3, True)], (
+        "attempts must climb and the last one must be marked final"
+    )
+
+
+def test_a_stop_request_does_not_count_against_the_scan(config, monkeypatch):
+    """Ctrl-C releases too, and that must not spend the scan's attempts.
+
+    Otherwise stopping the worker a few times — which is an ordinary thing to
+    do on a desktop machine — would be enough to make the next run give up on
+    a job that was never actually tried.
+    """
+    import rock_scan_worker.worker as worker_module
+
+    client = FakeSupabase([make_row("s0")])
+    queue = ScanQueue(client, config)
+    worker = Worker(
+        config=config.with_overrides(max_release_attempts=3),
+        client=client, queue=queue, reconstructor=None,
+        log=lambda _m: None, sleep=lambda _s: None,
+    )
+
+    def stop_then_release(job, **kwargs):
+        worker.request_stop()
+        return JobOutcome(job=job, outcome=OUTCOME_RELEASED)
+
+    monkeypatch.setattr(worker_module, "run_job", stop_then_release)
+    worker.run_once()
+    assert worker._releases == {}, "a stop is not the scan's fault"

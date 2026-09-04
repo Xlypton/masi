@@ -43,6 +43,23 @@ class Config:
     #: How many oldest claimable rows to fetch per poll before giving up on
     #: winning a race this round.
     claim_candidates: int = 5
+    #: How many times one scan may be RELEASED back to the queue before this
+    #: worker stops trying and marks it failed.
+    #:
+    #: Without a bound this is a livelock, and it is not hypothetical: the
+    #: first real cross-machine run wedged here. A non-zero exit from the
+    #: reconstruction engine is classed transient — reasonably, since the
+    #: same frames may reconstruct fine on a working box — so the job was
+    #: released, re-claimed immediately, and failed again, about every 13
+    #: seconds, indefinitely. Nothing was ever written to `failureReason`,
+    #: so from the phone the scan simply said "Building the 3D model"
+    #: forever, and from the database the fault was invisible.
+    #:
+    #: Counted per worker PROCESS, not persisted on the row. A restart is an
+    #: operator deciding to try again, which is exactly when the count should
+    #: reset — and it needs no column, so no schema change and no second
+    #: writer of a client-visible field.
+    max_release_attempts: int = 3
     #: How often a job in flight bumps `updatedAt` while it is inside a
     #: long-running external command. Must stay comfortably under
     #: `stale_claim_timeout_s`, because it is the only thing between a slow
