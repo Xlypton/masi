@@ -50,6 +50,18 @@ _GPU_FAILURE_MARKERS = (
     "no kernel image is available",
 )
 
+#: The subset of the above that also means "no usable GPU" when the command
+#: EXITED ZERO — i.e. text a healthy run can never print.
+#:
+#: Separate from `_GPU_FAILURE_MARKERS` because the two questions differ. On a
+#: failure any plausible GPU fingerprint is worth acting on. On a success the
+#: bar is much higher: `cuda`, `display` and `opengl` are ordinary words that
+#: a working CUDA build may well print in a banner or a device line, and
+#: treating one of those as proof of a broken GPU would drop a healthy machine
+#: onto the CPU silently and permanently. Add to this tuple only text that is
+#: itself an error.
+_SILENT_GPU_FAILURE_MARKERS = ("no kernel image is available",)
+
 #: Below this many SIFT keypoints on a typical frame, the rock simply has no
 #: texture to match. Chosen well under COLMAP's default 8192 cap: real rock
 #: gives thousands, blank granite in flat light gives a few hundred.
@@ -381,7 +393,18 @@ class ColmapReconstructor:
         # not just a failed one, or it is indistinguishable from a real (if
         # textureless) video until the mapper fails much later with a far
         # less specific "no 3D shape" error.
-        gpu_silently_failed = want_gpu and result.ok and _looks_like_gpu_failure(result)
+        #
+        # It is checked against the NARROW marker list, deliberately. The two
+        # cases are not symmetric: after a non-zero exit something has already
+        # gone wrong, so a broad guess costs at worst one CPU retry that fails
+        # the same way. On exit 0 the work SUCCEEDED, so a false positive
+        # throws away a perfectly good GPU for the rest of the run and every
+        # run after it — a silent order-of-magnitude slowdown that nothing
+        # reports and nobody would think to look for. Only text that cannot
+        # occur on a healthy run belongs in `_SILENT_GPU_FAILURE_MARKERS`.
+        gpu_silently_failed = (
+            want_gpu and result.ok and _looks_like_silent_gpu_failure(result)
+        )
         if result.ok and not gpu_silently_failed:
             if want_gpu:
                 self._used_gpu = True
@@ -417,6 +440,16 @@ class ColmapReconstructor:
 def _looks_like_gpu_failure(result: CommandResult) -> bool:
     haystack = (result.stderr + result.stdout).lower()
     return any(marker in haystack for marker in _GPU_FAILURE_MARKERS)
+
+
+def _looks_like_silent_gpu_failure(result: CommandResult) -> bool:
+    """A broken GPU that COLMAP nonetheless reported as success.
+
+    See `_SILENT_GPU_FAILURE_MARKERS` for why this is a narrower question
+    than `_looks_like_gpu_failure`.
+    """
+    haystack = (result.stderr + result.stdout).lower()
+    return any(marker in haystack for marker in _SILENT_GPU_FAILURE_MARKERS)
 
 
 def _parse_version(version: str) -> tuple[int, ...] | None:
