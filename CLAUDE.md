@@ -286,7 +286,15 @@ without touching the queue, storage, schema or CLI.
 
 **Verified in this container:** COLMAP 3.9.1 + ffmpeg reconstruct a synthetic scene end to end, and
 the Dart parser reads that real PLY and agrees with the worker's own Python-computed bounds.
-**Not verified anywhere:** the CUDA path, dense MVS, and the Dockerfile.
+**Verified on the Windows box (2026-09-05):** COLMAP **4.2.0** claims, downloads, reconstructs
+(150/150 frames, 8735 points, 0.455px) and uploads a live job in ~5 minutes, and the app renders
+that cloud. `manifest.engineVersion` is what tells the two machines' output apart — 4.2.0 is the
+Windows box, 3.9.1 is this container — which is worth knowing before believing any claim about
+where a given cloud came from.
+**Still not verified anywhere:** dense MVS, and the Dockerfile. **The CUDA path is verified only as
+a FALLBACK**, not as a GPU run: the box's GTX 1060 is Pascal (sm_61) and the prebuilt COLMAP
+release embeds no kernel for it, so every job there runs on the CPU by design. Nothing has yet
+reconstructed on a GPU.
 
 **The cross-machine run (2026-09-04) — what it proved, and the two bugs it found.**
 `tool/rock_scan_e2e.sh` drives one job across both machines against live data: render a
@@ -317,6 +325,27 @@ alone, which is the single premise the whole two-writer split rests on.
   an object — so the delete silently did nothing and every PLY would have stayed in the bucket
   forever. Invisible, because the survivor check counts DATABASE rows and those were genuinely gone.
   `e2e_reset.sh` now descends one level, which is the whole of the layout the worker writes.
+
+**COLMAP 4.x on the Windows box (2026-09-05) — two more, stacked, and the second is the instructive
+one.** Both were invisible from this side: the row just oscillated `15 → 31` forever.
+
+- **COLMAP 4.0 renamed the GPU flags.** `--Sift{Extraction,Matching}.use_gpu` became
+  `--Feature{Extraction,Matching}.use_gpu` when non-SIFT extractors (ALIKED, LoMa) arrived. The
+  worker hard-coded the pre-4.0 name, so a fresh 4.2.0 install died instantly on "unrecognised
+  option" — and note the CPU fallback could not have helped, since it passes the same bad flag.
+  The flag family is now chosen from the binary's own `version()`.
+- **A GPU can fail on every single image and still exit 0.** The prebuilt CUDA release embeds no
+  kernel for Pascal (sm_61), so a GTX 1060 gets "no kernel image is available" once per CUDA call —
+  39,450 times in one run — which COLMAP treats as a per-image WARNING. `feature_extractor` then
+  exits 0 having extracted nothing, and the failure only surfaces much later as a vague "no 3D
+  shape" from the mapper. So the GPU-failure markers are now checked on SUCCESS as well as failure.
+- **But the two checks use different lists, and that asymmetry is the point.** After a non-zero exit
+  a broad guess costs at worst one CPU retry that fails the same way. On exit 0 the work SUCCEEDED,
+  so a false positive strands a healthy GPU on the CPU for the rest of the run — an
+  order-of-magnitude slowdown that nothing logs and nobody would look for. `cuda`, `display` and
+  `opengl` are ordinary words a working CUDA build prints in a device line, so only text that is
+  itself an error belongs in `_SILENT_GPU_FAILURE_MARKERS`. `test_a_healthy_gpu_run_is_not_dropped_
+  to_the_cpu` fails if the broad list is put back.
 
 **Known gap:** capture needs a connection. The video is not persisted locally, so recording at a crag
 with no signal leaves the scan on the device with nothing to retry from. Offline capture needs a
