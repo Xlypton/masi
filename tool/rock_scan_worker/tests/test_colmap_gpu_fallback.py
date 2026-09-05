@@ -213,3 +213,70 @@ def test_gpu_flag_name_falls_back_to_legacy_when_version_is_unknown(monkeypatch,
 
     reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
     assert "--SiftExtraction.use_gpu" in calls[-1]
+
+
+#: Verbatim from COLMAP 4.2.0 (CUDA) on a GTX 1060 (Pascal, sm_61): the
+#: prebuilt release embeds no kernel for that compute capability, so every
+#: per-image CUDA call fails — and COLMAP logs it per image and STILL EXITS 0,
+#: having extracted nothing. Note it never says "cuda".
+PASCAL_NO_KERNEL_IMAGE_STDERR = (
+    "E20260904 22:31:09.104881 12044 cuda_check.cc:33] Cannot copy from device: "
+    "no kernel image is available for execution on the device\n"
+) * 3
+
+#: A HEALTHY CUDA run. Nothing is wrong here, but the text mentions a GPU in
+#: the ordinary way a working build does — which is exactly the shape that
+#: must not be mistaken for a failure when the command exited 0.
+HEALTHY_CUDA_STDOUT = (
+    "I20260904 22:31:09.104881 12044 feature_extraction.cc:251] "
+    "Creating SIFT GPU feature extractor\n"
+    "CUDA device 0: NVIDIA GeForce RTX 4070 (compute 8.9)\n"
+    "Processed file [150/150]\n"
+)
+
+
+def test_a_gpu_that_fails_silently_on_exit_zero_still_falls_back(monkeypatch, tmp_path):
+    """The second half of the COLMAP 4.x Windows bug, which had no test.
+
+    A CUDA architecture mismatch makes every per-image call fail, but COLMAP
+    calls that a warning and exits 0 having processed nothing. Checking the
+    markers only on a non-zero exit therefore missed it entirely, and the run
+    went on to fail much later in the mapper with a far vaguer message.
+    """
+    reconstructor, calls, logs = build(
+        monkeypatch, "auto", [result(0, PASCAL_NO_KERNEL_IMAGE_STDERR), result(0)]
+    )
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+
+    assert calls[0][-1] == "1", "the first attempt must ask for the GPU"
+    assert calls[1][-1] == "0", "and exit 0 must NOT stop the CPU retry"
+    assert any("falling back to CPU" in line for line in logs)
+    assert reconstructor._used_gpu is False, (
+        "a GPU that produced nothing was not the GPU that did the work"
+    )
+
+
+def test_a_healthy_gpu_run_is_not_dropped_to_the_cpu(monkeypatch, tmp_path):
+    """The false positive the narrow marker list exists to prevent.
+
+    `cuda`, `display` and `opengl` are ordinary words a working CUDA build
+    prints. They are fine as evidence after a non-zero exit — at worst one
+    wasted CPU retry — but on exit 0 they are not evidence of anything, and
+    acting on them would silently strand a healthy machine on the CPU for the
+    rest of the run and every run after it. Nothing would ever report that.
+    """
+    served = CommandResult(
+        args=("colmap",), returncode=0, stdout=HEALTHY_CUDA_STDOUT, stderr=""
+    )
+    reconstructor, calls, logs = build(monkeypatch, "auto", [served])
+    reconstructor._feature_extractor(tmp_path / "db", request(tmp_path))
+
+    assert len(calls) == 1, "a successful GPU run must not be retried at all"
+    assert calls[0][-1] == "1"
+    assert reconstructor._used_gpu is True
+    assert not any("falling back" in line for line in logs)
+
+
+def test_the_silent_marker_is_still_caught_on_a_normal_failure():
+    """Narrowing the exit-0 check must not narrow the exit-non-zero one."""
+    assert _looks_like_gpu_failure(result(1, PASCAL_NO_KERNEL_IMAGE_STDERR))
