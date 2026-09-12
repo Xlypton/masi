@@ -409,6 +409,52 @@ none of it shows up in a `grep -i dart:io`. Read this before touching sync, the 
 - **Geocoding degrades gracefully offline**: `lib/core/location/geocoding_service.dart:73-118` — 8s timeout, a
   blanket `catch`, returns `const []`. A dead Nominatim lookup shows an empty result list, never an error.
 
+### Photo tiers, and the egress bill (added 2026-09-12)
+
+The org hit its 5.5 GB monthly Supabase egress allowance (5.76 GB). Measured, not guessed: the live
+bucket is 118 objects / 417 MB, of which **35 shared originals average 5.5 MB** — straight-off-the-
+phone JPEGs, 68 of 118 between 4 and 8 MB.
+
+**A photo already on the device costs nothing** (the pull skips it), so egress is driven entirely by
+**cold** pulls. That makes the dominant consumer the thing nobody bills for: **every driven E2E run
+is a cold pull** in a fresh browser profile, signing in for real and fetching up to
+`kSharedPhotoByteBudgetPerPull` foreign photos. At the old tier that was ~110 MB **per run**, and
+~52 runs is the entire monthly allowance. Gate 3 was eating the quota gate 3 depends on.
+
+- **Three tiers now**: `shared/thumbs/` (512px) for list tiles, `shared/display/` (2048px) for the
+  canvas, the original for real pixels. The pull fetches **display**, falling back to the original.
+- **The fallback IS the migration.** Every photo published before the tier existed has no display
+  object, and `_publishDisplayBestEffort` may fail by design. Both land on the same branch and
+  behave exactly as before. Only an ABSENT object falls through — a transport failure still throws,
+  or a flaky network would silently pull the expensive tier the tier exists to avoid.
+- **The tier is safe only because route geometry is normalized** to the image's width/height
+  (`TopoRoute`). A line drawn on the original lands in the same place on any downscale. Under a
+  pixel-coordinate schema this would be a silent corruption of every topo, so the derivation is
+  pinned as a pure aspect-preserving resize (`shared_display_tier_test.dart`).
+- **D-5 is untouched.** It protects the user's OWN photos; the own-photo pass still fetches
+  originals, unbudgeted, at full resolution — a fresh install after a lost phone is that call. This
+  only changes which bytes stand in for OTHER climbers' photos, already derivative and evictable.
+- **`main_e2e.dart` caps the foreign budget at 0**, via `sharedPhotoByteBudgetProvider`. The suite
+  never asserts on a foreign photo's pixels. It goes in `e2eSharedOverrides()` (BOTH modes), not
+  `e2eOverrides()` — REAL mode skips that list to keep the auth wall under test, and REAL mode is
+  the only one that downloads anything, so a cap there alone would cap only the mode that never
+  spent. Both `e2eBoot` paths route through `e2eBootOverrides()`; REAL mode previously passed none.
+- **Every upload sets `cacheControl` (one year)** instead of Storage's mutable-object default of one
+  hour. Photo objects are immutable — the key carries the id. This does NOT make a first download
+  cheaper (Supabase bills CDN hits as "cached egress" too); it removes repeat transfer.
+- **`test/main_e2e_egress_test.dart` is a COST guard**, and it exists because this regression class
+  is invisible: a run that downloads 110 MB and one that downloads none are identical in every
+  assertion, screenshot and exit code. The only place it ever showed up was a quota email, after the
+  month was already spent. Its upload-site count is deliberately exact so a new upload site must
+  come and be counted rather than inherit the one-hour default.
+
+**Still open:** the 35 already-published originals have no display object, so they keep costing the
+original until re-published. Generalizing `SharedThumbBackfill` to derive BOTH tiers from its
+existing single download is the fix — it already pays the expensive part. Also still open: the
+foreign pull is **unbounded on native** (`_isWeb ? budget : null`), so an iOS user on cell data at a
+crag fetches every foreign photo. Bounding it needs `MissingPhotoByteResolver` wired on native
+first, which today is web-only — otherwise a withheld photo has no on-demand healing path.
+
 **Standing decisions (load-bearing, don't re-litigate):**
 - **Own photos are NEVER evicted.** They stay at **full resolution** and a quota failure **fails loudly**
   (`PhotoWriteException`/`PhotoWriteFailure.quotaExceeded`, `photo_write_exception.dart`) rather than silently
