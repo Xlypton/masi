@@ -453,6 +453,58 @@ const String kSharedThumbExt = '.jpg';
 /// the `shared/` prefix.
 String sharedThumbPath(String photoId) => 'shared/thumbs/$photoId$kSharedThumbExt';
 
+/// The long-edge cap, in pixels, of a published DISPLAY variant.
+///
+/// 2048 is chosen against what actually draws it: the topo canvas on a phone,
+/// at most a ~1200px-wide viewport on a 3x screen, with pinch-zoom that a
+/// climber uses to read a line rather than to inspect grain. 2048 stays sharp
+/// through that and is ~13x smaller than the originals it stands in for, which
+/// on this project's real bucket average 5.5 MB.
+///
+/// SAFE ONLY BECAUSE ROUTE GEOMETRY IS RESOLUTION-INDEPENDENT. Every anchor is
+/// stored normalized to the image's width/height (see `TopoRoute`), so a line
+/// drawn on the original lands in the same place on any downscale of it. A
+/// pixel-coordinate schema would make this whole tier a silent corruption.
+const int kSharedDisplayMaxEdge = 2048;
+
+/// JPEG quality for the display variant — higher than the thumbnail's 80
+/// because this one is looked AT, not glanced at in a list.
+const int kSharedDisplayQuality = 85;
+
+/// The extension a published DISPLAY variant always carries, for the same
+/// reason [kSharedThumbExt] exists: the derivation re-encodes to JPEG, so the
+/// extension is a property of the derivation and not of the source.
+const String kSharedDisplayExt = '.jpg';
+
+/// The single directory component every shared display object carries.
+const String kSharedDisplayDirName = 'display';
+
+/// The shared-bucket object path for the DISPLAY variant of the photo with
+/// canonical id [photoId] — the mid-size companion [SyncRemote.uploadSharedPhoto]
+/// writes alongside [sharedPhotoPath] and [sharedThumbPath].
+///
+/// THREE TIERS, each with a job: `thumbs/` (512px) for list tiles, `display/`
+/// (2048px) for the canvas, and the original for download and for anything that
+/// needs the real pixels. The middle one exists because the pull used to fetch
+/// the ORIGINAL for every foreign photo — ~110 MB on a cold pull of this
+/// project's own community — which is what exhausted the Storage egress quota
+/// on 2026-09-12.
+String sharedDisplayPath(String photoId) =>
+    'shared/$kSharedDisplayDirName/$photoId$kSharedDisplayExt';
+
+/// Derives the display variant of [src]. Top-level so it can cross a `compute`
+/// isolate boundary, exactly like `generateThumbnail` itself.
+///
+/// Returns [src] UNCHANGED when the source is already within the cap — the
+/// documented behaviour of `generateThumbnail`, and the reason the caller must
+/// hand it publish-safe (EXIF-stripped) bytes rather than raw ones.
+Future<Uint8List> generateSharedDisplayImage(Uint8List src) =>
+    generateThumbnail(
+      src,
+      maxEdge: kSharedDisplayMaxEdge,
+      quality: kSharedDisplayQuality,
+    );
+
 /// The shared object paths that count as PUBLISHED, given the object NAMES
 /// (not paths) listed directly under `shared/`.
 ///
@@ -1733,6 +1785,7 @@ class SupabaseSyncRemote implements SyncRemote {
         );
 
     await _publishThumbBestEffort(photoId, data);
+    await _publishDisplayBestEffort(photoId, data);
   }
 
   /// Derives and publishes the small companion at [sharedThumbPath] for an
@@ -1771,6 +1824,33 @@ class SupabaseSyncRemote implements SyncRemote {
       debugPrint(
         'SyncRemote: shared thumbnail for "$photoId" not published — the '
         'original IS published and readers fall back to it: $e',
+      );
+    }
+  }
+
+  /// Derives and publishes the mid-size companion at [sharedDisplayPath].
+  /// NEVER throws, by construction — same contract, and same reasoning, as
+  /// [_publishThumbBestEffort]: a missing display object costs a reader only
+  /// the size win, because the pull falls back to the original for it
+  /// (`SyncService.pullOwnAndShared`). A failed derivative must never be
+  /// observable as a failed publish.
+  Future<void> _publishDisplayBestEffort(String photoId, Uint8List data) async {
+    try {
+      final display = await compute(generateSharedDisplayImage, data);
+      await _client.storage
+          .from(_bucket)
+          .uploadBinary(
+            sharedDisplayPath(photoId),
+            display,
+            fileOptions: const FileOptions(
+              upsert: true,
+              cacheControl: kPhotoObjectCacheControl,
+            ),
+          );
+    } catch (e) {
+      debugPrint(
+        'SyncRemote: shared display variant for "$photoId" not published — '
+        'the original IS published and readers fall back to it: $e',
       );
     }
   }
@@ -1847,6 +1927,7 @@ class SupabaseSyncRemote implements SyncRemote {
       await _client.storage.from(_bucket).remove([
         sharedPhotoPath(photoId, ext),
         sharedThumbPath(photoId),
+        sharedDisplayPath(photoId),
       ]);
     } on StorageException {
       // Best-effort/idempotent.

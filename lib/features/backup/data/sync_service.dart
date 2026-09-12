@@ -1641,7 +1641,31 @@ class SyncService {
     try {
       final sharedPass = await _downloadAndRewritePhotos(
         sharedTables,
-        (canonicalId, ext) => _remote.downloadSharedPhoto(sharedPhotoPath(canonicalId, ext)),
+        // DISPLAY VARIANT FIRST, ORIGINAL AS THE FALLBACK.
+        //
+        // This pass used to fetch the full-resolution original for every
+        // foreign photo. Community photos are phone originals — 5.5 MB on
+        // average in this project's real bucket — so a cold pull moved ~110 MB,
+        // and roughly 52 of those is a whole month of the Storage egress
+        // allowance. That is what exhausted it on 2026-09-12. The 2048px
+        // display variant is ~13x smaller and is what the canvas actually
+        // draws; see [sharedDisplayPath] for why three tiers rather than two.
+        //
+        // The fallback is not defensive dressing, it is the migration: every
+        // photo published before this tier existed HAS no display object, and
+        // `_publishDisplayBestEffort` is explicitly allowed to fail. Both land
+        // on the same branch, and both behave exactly as they did before —
+        // which is what makes this change safe to ship without a live run.
+        //
+        // `null` (object absent) is the only thing that falls through. A
+        // transport failure THROWS out of `downloadSharedPhoto`, and must keep
+        // doing so rather than being retried as a miss: a flaky network would
+        // otherwise silently pull the expensive tier it is here to avoid.
+        (canonicalId, ext) async =>
+            await _remote.downloadSharedPhoto(sharedDisplayPath(canonicalId)) ??
+            await _remote.downloadSharedPhoto(
+              sharedPhotoPath(canonicalId, ext),
+            ),
         foreignByteBudget: _isWeb ? budget : null,
         ownUid: uid,
       );

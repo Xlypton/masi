@@ -346,6 +346,17 @@ class FakeSyncRemote implements SyncRemote {
     sharedStorage[path] = bytes;
     uploadedSharedPaths.add(path);
     callLog.add('upload:$path');
+    // The real remote publishes THREE objects (see [SyncRemote.uploadSharedPhoto]):
+    // the original, a `thumbs/` tile and a `display/` variant. Only the display
+    // one is modelled here, because it is the only one the PULL asks for — and
+    // a fake that omitted it would make every pull look like it takes two round
+    // trips (display miss, then original), which is precisely the legacy-photo
+    // path rather than the normal one.
+    //
+    // Deliberately NOT added to `uploadedSharedPaths`/`callLog`: those track
+    // PUBLICATIONS, and a derivative is explicitly not an equal of the
+    // publication — its failure is not a failed publish.
+    sharedStorage[sharedDisplayPath(photoId)] = bytes;
   }
 
   @override
@@ -355,8 +366,17 @@ class FakeSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<Set<String>> listSharedPhotoObjectPaths() async =>
-      _listAll(sharedStorage.keys);
+  Future<Set<String>> listSharedPhotoObjectPaths() async => _listAll(
+    // Mirrors the real implementation, which lists only the objects directly
+    // under `shared/` and drops the extension-less pseudo-entries Supabase
+    // returns for the `thumbs`/`display` FOLDERS (see
+    // [publishedSharedOriginals]). Without this filter the derivative objects
+    // added above would read as publications.
+    sharedStorage.keys.where(
+      (k) => !k.startsWith('shared/$kSharedDisplayDirName/') &&
+          !k.startsWith('shared/$kThumbDirName/'),
+    ),
+  );
 
   @override
   Future<void> removePhoto({
@@ -3598,7 +3618,7 @@ void main() {
 
         expect(
           sharedRequests(remote),
-          ['shared/photo-s4.jpg', 'shared/photo-s3.jpg'],
+          ['shared/display/photo-s4.jpg', 'shared/display/photo-s3.jpg'],
           reason: 'walls s0..s4 ascend in updatedAt, so s4 is the newest',
         );
       },
@@ -3729,7 +3749,7 @@ void main() {
 
         expect(
           sharedRequests(remote),
-          ['shared/photo-s0.jpg'],
+          ['shared/display/photo-s0.jpg'],
           reason: 'only the unprovable-ownership wall escapes the zero budget',
         );
         expect(result.photosDownloaded, 1);
@@ -3738,6 +3758,54 @@ void main() {
           1,
           reason: 'the definitely-foreign wall-s1 is the one that is withheld',
         );
+      },
+    );
+
+    test(
+      'the pull fetches the DISPLAY tier, not the original: a community photo '
+      'is a 5 MB phone original and the canvas draws it at 2048px, so fetching '
+      'the original moved ~110 MB per cold pull and exhausted the Storage '
+      'egress quota (2026-09-12)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(remote, count: 1);
+
+        await c.service.pullOwnAndShared();
+
+        expect(
+          sharedRequests(remote),
+          ['shared/display/photo-s0.jpg'],
+          reason:
+              'ONE request, and to the display tier — asking for the original '
+              'first and the variant second would cost more than it saves',
+        );
+      },
+    );
+
+    test(
+      'a LEGACY photo — published before the display tier existed — still '
+      'pulls, by falling back to the original',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(remote, count: 1);
+        // Every one of this project's real shared photos is in this state, and
+        // `_publishDisplayBestEffort` is explicitly allowed to fail, so the
+        // fallback is the migration path rather than defensive dressing.
+        remote.sharedStorage.remove('shared/display/photo-s0.jpg');
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(sharedRequests(remote), [
+          'shared/display/photo-s0.jpg',
+          'shared/photo-s0.jpg',
+        ], reason: 'display first, then the original when it is absent');
+        expect(
+          result.photosDownloaded,
+          1,
+          reason: 'the photo must still arrive — a missing derivative is a '
+              'lost size win, never a lost photo',
+        );
+        expect(await c.db.select(c.db.photos).get(), hasLength(1));
       },
     );
 
@@ -3884,7 +3952,7 @@ void main() {
 
         expect(
           sharedRequests(remote),
-          ['shared/photo-s1.jpg', 'shared/photo-s0.jpg'],
+          ['shared/display/photo-s1.jpg', 'shared/display/photo-s0.jpg'],
           reason:
               'the two warm ones cost nothing, so the full budget goes to the '
               'two still-missing (and now newest-missing) photos',
