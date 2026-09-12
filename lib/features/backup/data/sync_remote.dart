@@ -1106,6 +1106,25 @@ Map<String, dynamic> stripLocalOnlySyncColumns(Map<String, dynamic> row) {
 /// Verified end-to-end against the real backend via a two-account live
 /// smoke test, in addition to [SyncService]'s full `FakeSyncRemote`-backed
 /// unit-test coverage.
+/// `Cache-Control: max-age` for every photo object this class uploads, in
+/// seconds — one year.
+///
+/// Supabase Storage defaults to 3600 (one hour) when `cacheControl` is unset,
+/// which is what every upload here used to get. That default is for MUTABLE
+/// objects; these are not. A photo object's key contains the photo's id and
+/// its bytes never change under that key — a re-crop is a new photo with a new
+/// id — so a revalidation after an hour can only ever return 304, having spent
+/// a request to learn nothing.
+///
+/// Worth being precise about what this does and does not save, because the
+/// quota line it was written for (2026-09-12) is "cached egress" and Supabase
+/// bills CDN HITS under that heading too: this does not make a first download
+/// cheaper. What it removes is repeat transfer for a reader who still holds the
+/// bytes — browser HTTP cache and CDN edge retention — which the one-hour
+/// default was throwing away. The large saving is elsewhere (see
+/// `sharedPhotoByteBudgetProvider`); this is the cheap half of the same bug.
+const String kPhotoObjectCacheControl = '31536000';
+
 class SupabaseSyncRemote implements SyncRemote {
   SupabaseSyncRemote(this._client);
 
@@ -1127,7 +1146,10 @@ class SupabaseSyncRemote implements SyncRemote {
         .uploadBinary(
           objectPath,
           bytes,
-          fileOptions: const FileOptions(upsert: true),
+          fileOptions: const FileOptions(
+            upsert: true,
+            cacheControl: kPhotoObjectCacheControl,
+          ),
         ),
   );
 
@@ -1648,7 +1670,10 @@ class SupabaseSyncRemote implements SyncRemote {
         .uploadBinary(
           path,
           Uint8List.fromList(bytes),
-          fileOptions: const FileOptions(upsert: true),
+          fileOptions: const FileOptions(
+            upsert: true,
+            cacheControl: kPhotoObjectCacheControl,
+          ),
         );
   }
 
@@ -1701,7 +1726,10 @@ class SupabaseSyncRemote implements SyncRemote {
         .uploadBinary(
           sharedPhotoPath(photoId, ext),
           data,
-          fileOptions: const FileOptions(upsert: true),
+          fileOptions: const FileOptions(
+            upsert: true,
+            cacheControl: kPhotoObjectCacheControl,
+          ),
         );
 
     await _publishThumbBestEffort(photoId, data);
@@ -1734,7 +1762,10 @@ class SupabaseSyncRemote implements SyncRemote {
           .uploadBinary(
             sharedThumbPath(photoId),
             thumb,
-            fileOptions: const FileOptions(upsert: true),
+            fileOptions: const FileOptions(
+            upsert: true,
+            cacheControl: kPhotoObjectCacheControl,
+          ),
           );
     } catch (e) {
       debugPrint(
