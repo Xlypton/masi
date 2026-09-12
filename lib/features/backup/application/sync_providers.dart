@@ -158,6 +158,30 @@ class _UnavailableSyncRemote implements SyncRemote {
 /// will throw when constructed in that state; this provider deliberately
 /// does not repeat that, mirroring how `currentUidProvider` degrades to
 /// signed-out instead of crashing.
+/// How many OTHER climbers' photo files one [SyncService.pullOwnAndShared]
+/// may download.
+///
+/// A provider rather than a bare read of [kSharedPhotoByteBudgetPerPull] for
+/// exactly one reason: `lib/main_e2e.dart` overrides it to 0.
+///
+/// Community photos are 5 MB phone originals, so the default budget is ~110 MB
+/// of Storage egress on every COLD pull — and every driven E2E run is a cold
+/// pull, in a fresh browser profile with an empty OPFS/IndexedDB store. The
+/// suite asserts that the feed RENDERS and that the seeded published wall
+/// appears in it; it never asserts that a foreign photo's PIXELS arrived (the
+/// feed list draws `thumbs/`, and no assertion reads the canvas of someone
+/// else's topo). So that download bought the suite nothing and was, measurably,
+/// the largest single consumer of the project's egress quota — 52 runs is the
+/// whole monthly allowance.
+///
+/// Overriding it does NOT weaken the pull under test: the row/metadata fetch,
+/// RLS, the import and the feed render are all untouched, and a skipped photo
+/// is already a first-class state the engine heals from (see
+/// `_downloadAndRewritePhotos`' budget doc and `MissingPhotoByteResolver`).
+final sharedPhotoByteBudgetProvider = Provider<int>(
+  (ref) => kSharedPhotoByteBudgetPerPull,
+);
+
 final syncServiceProvider = Provider<SyncService>((ref) {
   AuthRepository authRepository;
   try {
@@ -181,5 +205,6 @@ final syncServiceProvider = Provider<SyncService>((ref) {
     connectivity: ref.watch(connectivityServiceProvider),
     photoFiles: PhotoFiles(),
     wifiOnly: () => ref.read(wifiOnlySettingProvider),
+    sharedPhotoByteBudget: ref.watch(sharedPhotoByteBudgetProvider),
   );
 });

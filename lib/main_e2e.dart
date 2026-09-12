@@ -78,6 +78,8 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import 'core/config/supabase_init_provider.dart' show initializeSupabase;
 import 'features/account/application/auth_providers.dart';
 import 'features/account/data/auth_repository.dart';
+import 'features/backup/application/sync_providers.dart'
+    show sharedPhotoByteBudgetProvider;
 import 'main.dart' show bootApp;
 
 /// The synthetic E2E identity's email, used by FAKE mode.
@@ -261,9 +263,33 @@ List<Override> e2eOverrides() => [
   authRepositoryProvider.overrideWithValue(E2eSignedInAuthRepository()),
 ];
 
+/// Overrides applied in BOTH modes, unlike [e2eOverrides].
+///
+/// Nothing here changes what the app DOES — only what a test run is willing to
+/// spend on someone else's bytes.
+///
+/// A cold pull downloads up to `kSharedPhotoByteBudgetPerPull` foreign photo
+/// originals, and community photos are 5 MB phone originals, so that is ~110 MB
+/// of Supabase Storage egress PER RUN. Every driven run is cold — a fresh
+/// browser profile, an empty OPFS store — and roughly 52 of them is the whole
+/// monthly free-tier allowance, which is exactly how the project ran out
+/// (2026-09-12). The suite never asserts on a foreign photo's pixels: the feed
+/// list draws `thumbs/`, and no test opens another owner's canvas. So this
+/// bought nothing and cost the quota that gate 3 itself depends on.
+///
+/// It belongs in BOTH modes and therefore not in [e2eOverrides], which REAL
+/// mode deliberately skips: FAKE mode carries no JWT and downloads nothing
+/// anyway, so REAL mode — the one that signs in for real and pulls for real —
+/// is precisely the mode that was paying.
+List<Override> e2eSharedOverrides() => [
+  sharedPhotoByteBudgetProvider.overrideWithValue(0),
+];
+
 /// The overrides for whichever mode this build selected.
-List<Override> e2eBootOverrides() =>
-    e2eRealSessionRequested ? const <Override>[] : e2eOverrides();
+List<Override> e2eBootOverrides() => [
+  ...e2eSharedOverrides(),
+  if (!e2eRealSessionRequested) ...e2eOverrides(),
+];
 
 /// Boots the app in whichever mode this build selected.
 ///
@@ -285,9 +311,11 @@ List<Override> e2eBootOverrides() =>
 /// A FAILED real sign-in deliberately does NOT fall back to the fake identity.
 /// Falling back would turn "the server rejected us" into a green run against a
 /// fake session — precisely the false pass this whole mode exists to remove.
-/// Instead the app boots with no overrides at all, so the production auth wall
+/// Instead the app boots with no AUTH overrides, so the production auth wall
 /// bounces to `/account` and the failure is visible on the very first
-/// screenshot.
+/// screenshot. ([e2eSharedOverrides] still applies — it caps foreign photo
+/// downloads and has no bearing on identity, and a signed-out boot pulls
+/// nothing anyway.)
 Future<void> e2eBoot() async {
   // Printed unconditionally, in both modes, so [e2eEntrypointMarker] can never
   // be tree-shaken out of the bundle the build gate greps.
@@ -300,7 +328,7 @@ Future<void> e2eBoot() async {
       'masi/e2e: FAKE session as $e2eTestEmail — no JWT, so every '
       'server-gated call will 401. That is expected in this mode.',
     );
-    return bootApp(overrides: e2eOverrides());
+    return bootApp(overrides: e2eBootOverrides());
   }
 
   try {
@@ -321,7 +349,7 @@ Future<void> e2eBoot() async {
       'Do not report any flow as verified from this run.',
     );
   }
-  return bootApp();
+  return bootApp(overrides: e2eBootOverrides());
 }
 
 Future<void> main() => e2eBoot();
