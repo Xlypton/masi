@@ -82,9 +82,12 @@ void main() {
     );
     expect(
       RegExp('cacheControl: kPhotoObjectCacheControl').allMatches(source),
-      hasLength(4),
-      reason: 'all four upload sites (own, shared original, shared thumb, and '
-          'the thumb backfill) must carry it',
+      hasLength(5),
+      reason:
+          'all five upload sites (own, shared original, shared thumb, shared '
+          'display, and the thumb backfill) must carry it — this count is '
+          'deliberately exact so a NEW upload site has to come here and be '
+          'counted rather than quietly inheriting the one-hour default',
     );
   });
 }
