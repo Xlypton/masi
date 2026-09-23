@@ -1648,7 +1648,8 @@ class SyncService {
         // average in this project's real bucket — so a cold pull moved ~110 MB,
         // and roughly 52 of those is a whole month of the Storage egress
         // allowance. That is what exhausted it on 2026-09-12. The 2048px
-        // display variant is ~13x smaller and is what the canvas actually
+        // display variant is ~4.3x smaller (measured: 185 MB -> 43 MB across
+        // the live corpus) and is what the canvas actually
         // draws; see [sharedDisplayPath] for why three tiers rather than two.
         //
         // The fallback is not defensive dressing, it is the migration: every

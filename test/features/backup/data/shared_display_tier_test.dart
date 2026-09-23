@@ -49,7 +49,7 @@ void main() {
       display.length,
       lessThan(original.length ~/ 3),
       reason: 'the whole point is the size cut; on the real corpus this is '
-          'about 13x',
+          'measured ~4.3x (185 MB -> 43 MB)',
     );
   });
 

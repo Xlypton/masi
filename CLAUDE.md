@@ -448,12 +448,38 @@ is a cold pull** in a fresh browser profile, signing in for real and fetching up
   month was already spent. Its upload-site count is deliberately exact so a new upload site must
   come and be counted rather than inherit the one-hour default.
 
-**Still open:** the 35 already-published originals have no display object, so they keep costing the
-original until re-published. Generalizing `SharedThumbBackfill` to derive BOTH tiers from its
-existing single download is the fix — it already pays the expensive part. Also still open: the
-foreign pull is **unbounded on native** (`_isWeb ? budget : null`), so an iOS user on cell data at a
-crag fetches every foreign photo. Bounding it needs `MissingPhotoByteResolver` wired on native
-first, which today is web-only — otherwise a withheld photo has no on-demand healing path.
+**Measured, after the live backfill (2026-09-23): 185 MB of originals → 43 MB of display
+variants, ~4.3×, ~1.3 MB each** — not the ~13× estimated before any existed. High-texture rock
+photos compress badly at 2048px/q85. A cold web pull of 20 foreign photos is ~26 MB, down from
+~110 MB. If egress bites again, the lever is `kSharedDisplayMaxEdge`/`kSharedDisplayQuality` —
+but the objects are INSERT-once (first writer wins), so a change only affects new ones unless
+the old are deleted and re-derived.
+
+- **Live RLS silently refused the whole tier until 2026-09-23.** The `shared/` INSERT policy
+  admitted exactly `shared/<file>` (owner) and `shared/thumbs/<file>` (any reader); every other
+  path hit `ELSE false`. Both display writers are best-effort by design, so every refusal was
+  swallowed: the tier would have stayed empty forever and nothing anywhere would have gone red.
+  Unit tests use fakes and cannot see RLS; gate 3 caps foreign downloads at 0 and so would not
+  have noticed either. **Any new object path under `shared/` needs a policy change first** — see
+  `supabase/migrations/20260923_shared_display_tier_insert.sql`.
+- **That policy was not in the repo at all.** `schema.sql` still showed the original wide-open
+  shared policies, and the two helpers (`can_read_shared_photo_object`,
+  `owns_shared_photo_object`) existed only on live.
+  `20260923_capture_shared_photo_storage_policies.sql` records them exactly — applied as a
+  verified no-op (definition hashes identical before and after).
+- **Backfill: done, both ways.** `SharedDerivativeBackfill` (was `SharedThumbBackfill`) derives
+  BOTH tiers from its single download, told per object which one is missing
+  (`sharedDerivativeGaps`). The live corpus was converged in one go by
+  `tool/backfill_shared_display.sh` — signed in as the E2E owner via the anon key, so RLS decided
+  every write — using the app's own resampler (`tool/derive_shared_display.dart`). It runs two
+  negative controls first; a run where every upload succeeds is equally consistent with a wide-open
+  policy. The one original left without a variant is on a `shared` wall that is not yet public, so
+  only its owner can read it, and their own in-app backfill will derive it.
+- **Native stays unbounded, deliberately** — the documented decision at
+  `missingPhotoByteResolverProvider` ("WEB-ONLY IN PRACTICE"): native has no origin quota, and a
+  budget without on-demand healing leaves foreign topos on blank placeholders. What that costs on
+  cellular (`wifiOnly` gates the push only) is what the display tier cut, since native pulls go
+  through the same pass. Re-open only if native is re-prioritised.
 
 **Standing decisions (load-bearing, don't re-litigate):**
 - **Own photos are NEVER evicted.** They stay at **full resolution** and a quota failure **fails loudly**

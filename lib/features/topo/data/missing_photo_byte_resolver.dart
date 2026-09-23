@@ -496,19 +496,13 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
 /// while the wiring never existed — a doc that promised a behaviour the app did
 /// not have.
 ///
-/// The gap is real, not hypothetical. The byte budget is NOT web-only: off-web
-/// `navigator.storage` does not exist, so `SyncService` reads no pressure and
-/// applies the plain count budget of `kSharedPhotoByteBudgetPerPull` foreign
-/// photos per pull. So on iOS, a public topo outside the newest budget's worth of
-/// foreign photos opens to a canvas with routes drawn over an empty placeholder,
-/// and tapping it fetches nothing; it fills in only across successive
-/// (30s-throttled, resume-triggered) pulls, a budget's worth at a time. A photo
-/// already on the device costs no budget, so it does converge — just slowly, and
-/// with no way to ask for the one photo being looked at.
+/// The gap is CLOSED BY CONSTRUCTION rather than by healing: native applies no
+/// foreign byte budget at all (`SyncService.pullOwnAndShared`'s
+/// `_isWeb ? budget : null`), so a native pull fetches every foreign photo and
+/// there is never a withheld one for this resolver to heal. That was chosen over
+/// wiring this resolver into the native display path because:
 ///
-/// Why that is accepted rather than fixed here:
-///
-///  * the app is now WEB-PRIMARY; the native build is deprioritised, and wiring
+///  * the app is WEB-PRIMARY; the native build is deprioritised, and wiring
 ///    this would mean turning the native display path — whose entire stated
 ///    contract is "byte-for-byte the same `Image.file` as before this
 ///    migration" — into a stateful fetch-and-retry widget, verifiable only on a
@@ -517,12 +511,14 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
 ///    ORIGIN QUOTA from breaking the user's own imports (`photo_files_web.dart`'s
 ///    L3 write throws on quota); an iOS documents directory has no such quota and
 ///    `PublicPhotoPruneService` is a permanent no-op there for exactly that
-///    reason. The proportionate native fix is therefore to stop rationing
-///    foreign photos on native at all — one condition in
-///    `SyncService.pullOwnAndShared`, not a second healing path here.
+///    reason.
 ///
-/// If native is ever re-prioritised, do one of those two, and correct this
-/// paragraph rather than leaving it describing the old state.
+/// The cost that choice leaves — every foreign photo on a cold native pull,
+/// cellular included, since `wifiOnly` gates the push only — is what the
+/// `shared/display/` tier (2026-09-12) cut: that pass fetches the 2048px variant,
+/// not the 5.5 MB-average original. Re-open this only if native is
+/// re-prioritised, and then correct this paragraph rather than leaving it
+/// describing the old state.
 ///
 /// A plain [Provider] with no `autoDispose`: the in-flight and negative maps ARE
 /// the de-duplication, and they only work if every caller shares one instance

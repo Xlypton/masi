@@ -20,13 +20,12 @@ import '../data/photo_files.dart';
 /// NO ON-DEMAND HEALING HERE, unlike the web twin. `photo_image_source_web.dart`
 /// reads bytes through `missingPhotoByteResolverProvider`, so a public photo the
 /// pull's byte budget skipped is fetched the moment something tries to show it.
-/// This path renders straight from the file and does not, which means a public
-/// photo beyond the newest `kSharedPhotoByteBudgetPerPull` foreign photos shows
-/// `placeholder` until a later pull happens to fetch it. That asymmetry is
-/// deliberate and argued in full at `missing_photo_byte_resolver.dart`'s
-/// `missingPhotoByteResolverProvider` ("WEB-ONLY IN PRACTICE") — including why
-/// the right native fix lives in `SyncService`, not here. Don't "fix" it by
-/// making this widget stateful without reading that first.
+/// Native needs no such path because native applies no byte budget: the pull
+/// fetches every foreign photo (as its `shared/display/` variant), so none is
+/// ever withheld for this widget to heal. Argued in full at
+/// `missing_photo_byte_resolver.dart`'s `missingPhotoByteResolverProvider`
+/// ("WEB-ONLY IN PRACTICE"). Don't "fix" it by making this widget stateful
+/// without reading that first.
 ///
 /// #56: [loadingPlaceholder], when given, is wired to `Image.file`'s own
 /// `frameBuilder` — `frame == null` (and not synchronously loaded, e.g. an
