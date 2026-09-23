@@ -281,6 +281,37 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
   }) async {
     await _acquireSlot();
     try {
+      // A canvas-sized heal asks for the DISPLAY variant first, exactly as the
+      // pull does (`SyncService.pullOwnAndShared`). This is the other half of
+      // the 2026-09-12 egress fix and was missed the first time: on web the
+      // pull's budget withholds foreign photos precisely so that THIS path
+      // fetches them when opened — so without it, every foreign topo a viewer
+      // opened still cost its full 5.5 MB-average original.
+      //
+      // Stored under the ORIGINAL's key, as the pull does. The key's extension
+      // can then disagree with the bytes (a `.png` photo's variant is JPEG);
+      // that is harmless because every renderer here sniffs content — web
+      // builds an untyped Blob, and Flutter's codecs ignore file names.
+      //
+      // Only an ABSENT variant falls through to the original (a photo from
+      // before the tier, or whose derivative failed to publish). A transport
+      // failure or timeout returns null here, like any other failed heal, so a
+      // flaky network cannot quietly buy the expensive object this exists to
+      // avoid — see [_probe]. The ORIGINAL's path is marked failed too, since
+      // that is the key [resolve] consults before asking again.
+      if (!wantsThumbnail) {
+        final display = await _probe(sharedDisplayPath(photoId));
+        final displayBytes = display.bytes;
+        if (displayBytes != null) {
+          await _cacheOriginal(photoId, ext, displayBytes);
+          return displayBytes;
+        }
+        if (!display.absent) {
+          _recentFailures[objectPath] = _now();
+          return null;
+        }
+      }
+
       final bytes = await _download(objectPath);
       if (bytes != null) {
         if (!wantsThumbnail) {
@@ -340,25 +371,36 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
   /// black-holes the request) otherwise never settles at all. A timeout lands
   /// in the `catch` below and is therefore indistinguishable from being
   /// offline — which is exactly right for the caller.
-  Future<Uint8List?> _download(String objectPath) async {
+  Future<Uint8List?> _download(String objectPath) async =>
+      (await _probe(objectPath)).bytes;
+
+  /// [_download], but saying WHY there are no bytes: [absent] is true only when
+  /// the remote answered and the object is not there (or is empty), and false
+  /// for a transport failure or a timeout.
+  ///
+  /// Exactly one caller needs the difference — the display-tier probe in
+  /// [_fetch] — and it needs it badly: "no display variant" means fall back to
+  /// the original, while "could not reach the bucket" must NOT, or every flaky
+  /// connection would quietly buy the 5.5 MB object the tier exists to avoid.
+  Future<({Uint8List? bytes, bool absent})> _probe(String objectPath) async {
     try {
       final bytes = await _remote
           .downloadSharedPhoto(objectPath)
           .timeout(fetchTimeout);
       if (bytes == null || bytes.isEmpty) {
         // A genuinely absent object: the wall was unshared, the owner deleted
-        // it, it never uploaded, or (for a thumbnail) it predates the tier.
+        // it, it never uploaded, or (for a derivative) it predates the tier.
         // Remember that, or every rebuild re-asks.
         _recentFailures[objectPath] = _now();
-        return null;
+        return (bytes: null, absent: true);
       }
-      return Uint8List.fromList(bytes);
+      return (bytes: Uint8List.fromList(bytes), absent: false);
     } catch (_) {
       // Offline, a Storage error, an unavailable remote — all the same to the
       // caller, and all a clean no-op. The negative entry is what keeps an
       // offline device from re-attempting on every frame.
       _recentFailures[objectPath] = _now();
-      return null;
+      return (bytes: null, absent: false);
     }
   }
 
