@@ -191,6 +191,11 @@ class ToposScreen extends ConsumerStatefulWidget {
     this.setLocationLocationService,
   });
 
+  /// On the row skeleton shown while the library is empty because the first
+  /// sync is still running — as opposed to [_ToposSkeleton.skeletonKey]
+  /// alone, which the local database load shows too.
+  static const Key syncingKey = Key('topos-syncing');
+
   final Future<ImageSource?> Function(BuildContext) photoSourcePicker;
   final Future<XFile?> Function(ImageSource) photoPicker;
 
@@ -749,6 +754,21 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                               onRetry: () => ref
                                   .read(syncOrchestratorProvider.notifier)
                                   .pullNow(),
+                            );
+                          }
+                          // A sync still running means "not here YET", not
+                          // "nothing here". A fresh sign-in used to show "No
+                          // topos yet" — no shimmer, no hint — for the whole
+                          // first pull. The rows now land before any photo
+                          // (`SyncService.pullOwnAndShared`), so this is a
+                          // short wait, and it looks like the list it is: the
+                          // same row skeleton the local load shows.
+                          if (syncState.status == SyncStatus.syncing) {
+                            return KeyedSubtree(
+                              key: ToposScreen.syncingKey,
+                              child: _ToposSkeleton(
+                                bottomInset: bottomChromeInset + 64,
+                              ),
                             );
                           }
                           // Stage 3 offline-reads gap: a genuinely empty
