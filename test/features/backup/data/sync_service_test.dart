@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data' show Uint8List;
 
@@ -652,6 +653,33 @@ class _MidPushWriteRemote extends FakeSyncRemote {
 /// is currently set to (no `connectivity_plus` platform channel), and
 /// whatever [reachable] is set to for the §1d reachability probe (no real
 /// HTTP request).
+/// A [FakeSyncRemote] whose private photo downloads can be held open or made
+/// to fail, so a test can look at the database WHILE a pull is downloading.
+class _GatedDownloadRemote extends FakeSyncRemote {
+  Completer<void>? gate;
+  bool failDownloads = false;
+
+  @override
+  Future<List<int>?> downloadPhoto({
+    required String uid,
+    required String objectPath,
+  }) async {
+    downloadRequests.add(objectPath);
+    if (failDownloads) throw StateError('network down');
+    await gate?.future;
+    return privateStorage[objectPath];
+  }
+
+  Completer<void>? sharedGate;
+
+  @override
+  Future<List<int>?> downloadSharedPhoto(String objectPath) async {
+    downloadRequests.add(objectPath);
+    await sharedGate?.future;
+    return sharedStorage[objectPath];
+  }
+}
+
 class FakeConnectivityService implements ConnectivityService {
   FakeConnectivityService(this.status, {this.reachable = true});
 
@@ -2864,6 +2892,187 @@ void main() {
         final absolutePath = p.join(containerB.docsDir.path, photo.localPath);
         expect(File(absolutePath).existsSync(), isTrue);
         expect(File(absolutePath).readAsBytesSync(), fixtureJpegBytes(42));
+      },
+    );
+
+    test(
+      'on WEB, own ROWS land before their photo BYTES finish downloading — a '
+      'fresh sign-in shows the library while the photos are still on their way',
+      () async {
+        // The bug: rows were imported only after EVERY own photo had
+        // downloaded at full resolution, so a fresh sign-in showed "No topos
+        // yet" for the whole download (40 photos, 217 MB, on a real account).
+        final remote = _GatedDownloadRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+        final containerA = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerA.db.close());
+        final file = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedWallHierarchy(
+          containerA.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+        await containerA.service.pushOwn();
+
+        final containerB = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerB.db.close());
+        remote.gate = Completer<void>();
+        final pull = containerB.service.pullOwnAndShared();
+
+        // Wait until the pull is actually blocked on the photo download.
+        while (remote.downloadRequests.isEmpty) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
+        final wallsMidPull = await containerB.db.select(containerB.db.walls).get();
+        final photosMidPull = await containerB.db.select(containerB.db.photos).get();
+        expect(
+          wallsMidPull.map((w) => w.id),
+          ['wall-1'],
+          reason: 'the wall must be visible while its photo is still downloading',
+        );
+        expect(photosMidPull.map((ph) => ph.id), ['photo-1']);
+
+        remote.gate!.complete();
+        final result = await pull;
+        expect(result.errors, isEmpty);
+        expect(result.ownImported, isTrue);
+        expect(result.photosDownloaded, 1);
+
+        final photo = (await containerB.db.select(containerB.db.photos).get()).single;
+        expect(photo.localPath, 'photos/photo-1.jpg');
+        expect(photo.dirty, isFalse, reason: 'restoring a path is not a local edit');
+        expect(
+          File(p.join(containerB.docsDir.path, photo.localPath)).readAsBytesSync(),
+          fixtureJpegBytes(42),
+        );
+      },
+    );
+
+    test(
+      'a failed own photo download still leaves the own rows imported, and '
+      'reports the pull as not clean',
+      () async {
+        final remote = _GatedDownloadRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+        final containerA = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerA.db.close());
+        final file = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedWallHierarchy(
+          containerA.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+        await containerA.service.pushOwn();
+
+        final containerB = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerB.db.close());
+        remote.failDownloads = true;
+        final result = await containerB.service.pullOwnAndShared();
+
+        expect(result.ownImported, isFalse);
+        expect(result.errors.single, contains('own photo downloads failed'));
+        expect(
+          (await containerB.db.select(containerB.db.walls).get()).map((w) => w.id),
+          ['wall-1'],
+        );
+      },
+    );
+
+    test(
+      'on WEB, a photo row whose LOCAL copy is newer keeps its own path — the '
+      'late photo pass must not overwrite a row the import deliberately skipped',
+      () async {
+        final remote = _GatedDownloadRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+        final containerA = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerA.db.close());
+        await seedWallHierarchy(
+          containerA.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: writeFile(containerA.srcDir, 'wall.jpg', 42).path,
+        );
+        await containerA.service.pushOwn();
+
+        // Device B edited this topo after A pushed it, and has not pushed yet.
+        final containerB = makeContainer(remote: remote, auth: auth, isWeb: true);
+        addTearDown(() => containerB.db.close());
+        await seedWallHierarchy(
+          containerB.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: 'photos/photo-1.png',
+          updatedAt: 999999,
+        );
+
+        await containerB.service.pullOwnAndShared();
+
+        final photo = (await containerB.db.select(containerB.db.photos).get()).single;
+        expect(photo.localPath, 'photos/photo-1.png');
+      },
+    );
+
+    test(
+      "on WEB, the community's ROWS land before their photo bytes too — a "
+      'brand-new account, with nothing of its own, sees shared topos at once',
+      () async {
+        final remote = _GatedDownloadRemote();
+        final u2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => u2.db.close());
+        await seedWallHierarchy(
+          u2.db,
+          ownerId: _uidU2,
+          areaId: 'area-u2',
+          sectorId: 'sector-u2',
+          wallId: 'wall-u2',
+          photoId: 'photo-u2',
+          routeId: 'route-u2',
+          visibility: 'shared',
+          localPath: writeFile(u2.srcDir, 'wall-u2.jpg', 9).path,
+        );
+        await u2.service.pushOwn();
+
+        final newcomer = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+          isWeb: true,
+        );
+        addTearDown(() => newcomer.db.close());
+        remote.sharedGate = Completer<void>();
+        final pull = newcomer.service.pullOwnAndShared();
+
+        while (!remote.downloadRequests.any((r) => r.startsWith('shared/'))) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        expect(
+          (await newcomer.db.select(newcomer.db.walls).get()).map((w) => w.id),
+          ['wall-u2'],
+          reason: 'the shared wall must be visible while its photo downloads',
+        );
+
+        remote.sharedGate!.complete();
+        final result = await pull;
+        expect(result.errors, isEmpty);
+        expect(result.sharedImported, isTrue);
       },
     );
   });

@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'basemap.dart';
+import 'style_compat.dart';
 import 'tile_cache_store.dart';
 import 'vector_tile_cache.dart';
 
@@ -65,12 +66,18 @@ final basemapStyleProvider = FutureProvider<Style>((ref) async {
 /// has a style and its fonts to draw the cached tiles with. On native the
 /// package's own disk cache already covers them, so this is a plain client.
 ///
+/// Either way it is wrapped in [StyleCompatClient], OUTSIDE the cache, which
+/// rewrites the style constructs the renderer misreads (the `{name_en}`
+/// labels) — see `style_compat.dart`.
+///
 /// Overridable in tests, which must never touch the network.
 final basemapHttpClientProvider = Provider<http.Client>((ref) {
   final client = http.Client();
   ref.onDispose(client.close);
-  if (!kIsWeb) return client;
-  return CachingStyleClient(store: basemapCacheStore(ref), inner: client);
+  if (!kIsWeb) return StyleCompatClient(client);
+  return StyleCompatClient(
+    CachingStyleClient(store: basemapCacheStore(ref), inner: client),
+  );
 });
 
 /// The byte store shared by the tile and style caches, so they share one

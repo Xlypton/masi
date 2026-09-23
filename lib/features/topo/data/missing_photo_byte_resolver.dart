@@ -55,6 +55,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/database_provider.dart';
+import '../../account/application/auth_providers.dart';
 import '../../backup/application/sync_providers.dart';
 import '../../backup/data/sync_remote.dart';
 import 'photo_files.dart';
@@ -124,6 +125,7 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
     this.slotWaitTimeout = const Duration(seconds: 45),
     DateTime Function()? now,
     Future<String?> Function(String photoId)? originalExtFor,
+    Future<String?> Function(String photoId)? ownerUidIfOwn,
     // Private fields with named params, matching `SyncService`'s and
     // `PublicPhotoPruneService`'s house pattern: a named parameter cannot
     // itself be private, so the initializing formal the lint asks for is not
@@ -132,7 +134,9 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
        _photoFiles = photoFiles, // ignore: prefer_initializing_formals
        _now = now ?? DateTime.now,
        // ignore: prefer_initializing_formals
-       _originalExtFor = originalExtFor;
+       _originalExtFor = originalExtFor,
+       // ignore: prefer_initializing_formals
+       _ownerUidIfOwn = ownerUidIfOwn;
 
   final SyncRemote _remote;
   final PhotoFiles _photoFiles;
@@ -149,6 +153,26 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
   /// rescue a pre-thumbnail-tier publish. Never expected to throw — see
   /// [missingPhotoByteResolverProvider]'s wiring, which swallows.
   final Future<String?> Function(String photoId)? _originalExtFor;
+
+  /// The signed-in user's uid when the photo with this canonical id is THEIR
+  /// OWN, else `null`. Optional; `null` here disables own-photo fetching.
+  ///
+  /// This is what lets a fresh sign-in show its library at once. The pull now
+  /// imports the user's own rows before their photo bytes (see
+  /// `SyncService.pullOwnAndShared`), and until the bulk pass reaches a given
+  /// photo, THIS is how the one on screen arrives: from the owner's private
+  /// `<uid>/<photoId><ext>` object, which is the only place an unpublished
+  /// photo exists. So the first screenful loads first, rather than in
+  /// whatever order the pass happens to walk.
+  ///
+  /// Never expected to throw — see [missingPhotoByteResolverProvider]'s
+  /// wiring, which swallows.
+  final Future<String?> Function(String photoId)? _ownerUidIfOwn;
+
+  /// OWN OBJECT PATH -> the in-flight download of that original, shared by a
+  /// photo's list thumbnail and its canvas so the two never download the same
+  /// multi-megabyte original twice.
+  final Map<String, Future<Uint8List?>> _ownInFlight = {};
 
   @override
   final Duration negativeTtl;
@@ -281,6 +305,17 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
   }) async {
     await _acquireSlot();
     try {
+      final ownUid = await _ownUid(photoId);
+      if (ownUid != null) {
+        return await _fetchOwn(
+          ownUid: ownUid,
+          storedKey: storedKey,
+          photoId: photoId,
+          ext: ext,
+          wantsThumbnail: wantsThumbnail,
+        );
+      }
+
       // A canvas-sized heal asks for the DISPLAY variant first, exactly as the
       // pull does (`SyncService.pullOwnAndShared`). This is the other half of
       // the 2026-09-12 egress fix and was missed the first time: on web the
@@ -356,6 +391,85 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
     } finally {
       _releaseSlot();
       _inFlight.remove(objectPath);
+    }
+  }
+
+  /// The signed-in user's uid if [photoId] is their own photo. Never throws.
+  Future<String?> _ownUid(String photoId) async {
+    final lookup = _ownerUidIfOwn;
+    if (lookup == null) return null;
+    try {
+      return await lookup(photoId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetches one of the signed-in user's OWN photos.
+  ///
+  /// The CANVAS always gets the full-resolution original from the owner's
+  /// private object, never the shared display variant, even for a published
+  /// photo. That is decision D-5, and it is load-bearing here rather than a
+  /// preference: whatever this writes under `photos/<id><ext>` is what the
+  /// pull's own-photo pass later finds "already here" and skips, so a 2048px
+  /// variant written there would become the user's copy of their own photo
+  /// for good.
+  ///
+  /// A list THUMBNAIL tries the small cloud thumbnail first — present when
+  /// the photo is published, tens of kilobytes, and never written under the
+  /// original's key (see [_preferIntendedKey]) — and otherwise fetches the
+  /// original, which on web also writes the local thumbnail as a side effect.
+  /// That costs what the pull would have spent on this photo anyway; what
+  /// changes is only that the photo on screen is fetched first.
+  Future<Uint8List?> _fetchOwn({
+    required String ownUid,
+    required String storedKey,
+    required String photoId,
+    required String ext,
+    required bool wantsThumbnail,
+  }) async {
+    if (wantsThumbnail) {
+      final thumb = await _probe(sharedThumbPath(photoId));
+      final thumbBytes = thumb.bytes;
+      if (thumbBytes != null) return thumbBytes;
+      if (!thumb.absent) return null;
+    }
+
+    // A thumbnail key's `.jpg` is not the photo's own extension.
+    final originalExt = wantsThumbnail ? await _originalExt(photoId) : ext;
+    if (originalExt == null) return null;
+    final ownPath = '$ownUid/$photoId$originalExt';
+    if (_isNegativelyCached(ownPath)) return null;
+
+    // Block body, not an arrow: `remove` returns this very future, and
+    // `whenComplete` awaits a returned future — it would wait on itself.
+    final bytes = await (_ownInFlight[ownPath] ??= _downloadOwn(
+      ownUid,
+      ownPath,
+    ).whenComplete(() {
+      _ownInFlight.remove(ownPath);
+    }));
+    if (bytes == null) return null;
+    await _cacheOriginal(photoId, originalExt, bytes);
+    return wantsThumbnail ? await _preferIntendedKey(storedKey, bytes) : bytes;
+  }
+
+  /// Downloads the owner's private object at [ownPath]. Same contract as
+  /// [_probe]: never throws, bounded by [fetchTimeout], and any outcome that
+  /// is not usable bytes is negatively cached.
+  Future<Uint8List?> _downloadOwn(String ownUid, String ownPath) async {
+    try {
+      final bytes = await _remote
+          .downloadPhoto(uid: ownUid, objectPath: ownPath)
+          .timeout(fetchTimeout);
+      if (bytes == null || bytes.isEmpty) {
+        _recentFailures[ownPath] = _now();
+        return null;
+      }
+      return Uint8List.fromList(bytes);
+    } catch (_) {
+      _recentFailures[ownPath] = _now();
+      return null;
     }
   }
 
@@ -578,6 +692,24 @@ final missingPhotoByteResolverProvider = Provider<MissingPhotoByteResolver>((
       // ever reached on the legacy-fallback path anyway. A throw — disposed
       // container, no database, a query that fails — degrades to "extension
       // unknown", which just declines the fallback.
+      // Lazy for the same reasons as `originalExtFor` below. The uid is read
+      // at call time, so a sign-in or an account switch is picked up without
+      // rebuilding the resolver (whose maps ARE its de-duplication).
+      ownerUidIfOwn: (photoId) async {
+        try {
+          final uid = ref.read(effectiveUidProvider);
+          if (uid == null) return null;
+          final database = ref.read(appDatabaseProvider);
+          final row =
+              await (database.select(database.photos)
+                    ..where((t) => t.id.equals(photoId))
+                    ..limit(1))
+                  .getSingleOrNull();
+          return row?.ownerId == uid ? uid : null;
+        } catch (_) {
+          return null;
+        }
+      },
       originalExtFor: (photoId) async {
         try {
           final database = ref.read(appDatabaseProvider);

@@ -1035,6 +1035,37 @@ void main() {
     );
 
     testWidgets(
+      'an EMPTY library while the first sync is still running shows the row '
+      'shimmer, not "No topos yet" — which read as "your topos are gone" for '
+      'the whole of a fresh sign-in',
+      (tester) async {
+        final orchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(status: SyncStatus.syncing),
+        );
+        final container = _makeContainer(syncOrchestrator: orchestrator);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        // Bounded pumps, not `_drain`: the shimmer never settles.
+        for (var i = 0; i < 20; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+
+        expect(find.byKey(ToposScreen.syncingKey), findsOneWidget);
+        expect(find.byKey(const Key('topos-skeleton')), findsOneWidget);
+        expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+        expect(find.text('No topos yet'), findsNothing);
+
+        // The sync finishes and there really is nothing: NOW it may say so.
+        orchestrator.emit(const SyncOrchestratorState());
+        await _drain(tester);
+
+        expect(find.byKey(ToposScreen.syncingKey), findsNothing);
+        expect(find.byKey(const Key('topos-empty-state')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'an EMPTY library with a pull error does not print the same sentence '
       'twice — the full-screen #72 empty state already says it, larger and '
       'with its own Retry',

@@ -10,6 +10,7 @@
 
 import 'dart:async' show Completer, unawaited;
 
+import 'package:masi/core/map/map_gestures.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/location/geocoding_service.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
@@ -780,6 +781,11 @@ void main() {
         expect(InteractiveFlag.hasPinchMove(flags), isTrue);
         expect(InteractiveFlag.hasDoubleTapZoom(flags), isTrue);
         expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
+        // Unset limits let quick zoom run the camera to infinity and crash
+        // the app — see `map_gestures.dart`.
+        expect(flutterMap.options.minZoom, kMapMinZoom);
+        expect(flutterMap.options.maxZoom, kMapMaxZoom);
+        expect(flutterMap.options.interactionOptions, masiMapInteractionOptions);
       },
     );
   });

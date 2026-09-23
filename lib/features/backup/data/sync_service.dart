@@ -1447,18 +1447,26 @@ class SyncService {
     var ownPhotosDownloaded = 0;
     var sharedPhotosDownloaded = 0;
     var ownImported = false;
+    var ownPhotosFailed = false;
     var ownRowsOrphaned = 0;
     var sharedImported = false;
     var sharedPhotoBytesSkipped = 0;
     final errors = <String>[];
 
     // ---- OWN section ----------------------------------------------------
-    // Fetched, its photos downloaded, and imported FIRST and entirely
-    // before any shared fetch is even attempted — the signed-in user's own
-    // topos must come back on a fresh install regardless of what happens
-    // below.
+    // Fetched and imported FIRST, before any shared fetch is even attempted —
+    // the signed-in user's own topos must come back on a fresh install
+    // regardless of what happens below.
+    //
+    // Rows land BEFORE their photo bytes. They used to wait for every own
+    // photo to download at full resolution (D-5), so a fresh sign-in showed
+    // an empty library for as long as that took — measured on a real
+    // account, 40 photos and 217 MB before the first topo could appear. The
+    // bytes now follow at the very end of the pull (see "OWN photos" below),
+    // and a photo someone is actually LOOKING at is fetched on demand ahead
+    // of that pass by `MissingPhotoByteResolver`, which is what makes the
+    // first screenful arrive first.
     var ownFetchOk = false;
-    var ownHadError = false;
     var ownTables = <String, List<Map<String, dynamic>>>{};
     // What the own import could not write because a foreign key pointed at
     // another owner's row — retried after the SHARED import below, which is
@@ -1469,17 +1477,17 @@ class SyncService {
       ownRowsPulled = _countRows(ownTables);
       ownFetchOk = true;
     } catch (e) {
-      ownHadError = true;
       errors.add('own rows fetch failed: $e');
     }
 
-    if (ownFetchOk) {
+    // NO BUDGET, on purpose and permanently. The signed-in user's own photos
+    // are the one thing this device must always be able to get back — a fresh
+    // install after a lost phone is exactly this call — and decision D-5
+    // keeps them at full resolution. `foreignByteBudget` is left null, which
+    // is the "unbounded" contract of the pass. A photo the on-demand resolver
+    // already fetched for the screen is found locally and skipped.
+    Future<void> ownPhotoPass() async {
       try {
-        // NO BUDGET, on purpose and permanently. The signed-in user's own
-        // photos are the one thing this device must always be able to get
-        // back — a fresh install after a lost phone is exactly this call —
-        // and decision D-5 keeps them at full resolution. `foreignByteBudget`
-        // is left null, which is the "unbounded" contract of the pass below.
         final ownPass = await _downloadAndRewritePhotos(
           ownTables,
           (canonicalId, ext) =>
@@ -1487,21 +1495,31 @@ class SyncService {
         );
         ownPhotosDownloaded = ownPass.downloaded;
       } catch (e) {
-        ownHadError = true;
+        ownPhotosFailed = true;
         errors.add('own photo downloads failed: $e');
       }
+    }
 
+    // The `localPath` each own photo row was imported with, so a photo pass
+    // that runs AFTER the import can tell which rows it actually changed.
+    final ownImportedPaths = _photoPathsOf(ownTables);
+    var ownRowsImported = false;
+    if (ownFetchOk) {
+      // NATIVE keeps the old order — bytes, then rows. Its photo widget has
+      // no on-demand fetch (see `missingPhotoByteResolverProvider`'s
+      // "WEB-ONLY IN PRACTICE"), so a row that landed before its bytes would
+      // sit on a placeholder with nothing to heal it.
+      if (!_rowsBeforePhotos) await ownPhotoPass();
       try {
         ownReport = await _backupRepository.importSnapshot(
           {'tables': ownTables},
           mode: ConflictMode.lww,
         );
-        // ownImported reflects the WHOLE own pipeline (fetch + photo
-        // download + import), not just this final write — a hiccup earlier
-        // (e.g. the photo download) still means "own" wasn't a clean,
-        // fully-successful pull this time, even though the rows themselves
-        // did get written.
-        ownImported = !ownHadError;
+        ownRowsImported = true;
+        // The deferred retry and the photo pass below can still clear it:
+        // ownImported reflects the WHOLE own pipeline (fetch, import, photo
+        // download), not just this row write.
+        ownImported = !ownPhotosFailed;
       } catch (e) {
         errors.add('own rows import failed: $e');
       }
@@ -1638,45 +1656,55 @@ class SyncService {
     // always uses, rather than adding a second code path. Web behaviour is
     // unchanged: `budget` (and the storage-pressure early-out that computed it
     // above) still applies exactly as before.
-    try {
-      final sharedPass = await _downloadAndRewritePhotos(
-        sharedTables,
-        // DISPLAY VARIANT FIRST, ORIGINAL AS THE FALLBACK.
-        //
-        // This pass used to fetch the full-resolution original for every
-        // foreign photo. Community photos are phone originals — 5.5 MB on
-        // average in this project's real bucket — so a cold pull moved ~110 MB,
-        // and roughly 52 of those is a whole month of the Storage egress
-        // allowance. That is what exhausted it on 2026-09-12. The 2048px
-        // display variant is ~4.3x smaller (measured: 185 MB -> 43 MB across
-        // the live corpus) and is what the canvas actually
-        // draws; see [sharedDisplayPath] for why three tiers rather than two.
-        //
-        // The fallback is not defensive dressing, it is the migration: every
-        // photo published before this tier existed HAS no display object, and
-        // `_publishDisplayBestEffort` is explicitly allowed to fail. Both land
-        // on the same branch, and both behave exactly as they did before —
-        // which is what makes this change safe to ship without a live run.
-        //
-        // `null` (object absent) is the only thing that falls through. A
-        // transport failure THROWS out of `downloadSharedPhoto`, and must keep
-        // doing so rather than being retried as a miss: a flaky network would
-        // otherwise silently pull the expensive tier it is here to avoid.
-        (canonicalId, ext) async =>
-            await _remote.downloadSharedPhoto(sharedDisplayPath(canonicalId)) ??
-            await _remote.downloadSharedPhoto(
-              sharedPhotoPath(canonicalId, ext),
-            ),
-        foreignByteBudget: _isWeb ? budget : null,
-        ownUid: uid,
-      );
-      sharedPhotosDownloaded = sharedPass.downloaded;
-      sharedPhotoBytesSkipped = sharedPass.skippedForBudget;
-    } catch (e) {
-      sharedHadError = true;
-      errors.add('shared photo downloads failed: $e');
+    Future<void> sharedPhotoPass() async {
+      try {
+        final sharedPass = await _downloadAndRewritePhotos(
+          sharedTables,
+          // DISPLAY VARIANT FIRST, ORIGINAL AS THE FALLBACK.
+          //
+          // This pass used to fetch the full-resolution original for every
+          // foreign photo. Community photos are phone originals — 5.5 MB on
+          // average in this project's real bucket — so a cold pull moved ~110 MB,
+          // and roughly 52 of those is a whole month of the Storage egress
+          // allowance. That is what exhausted it on 2026-09-12. The 2048px
+          // display variant is ~4.3x smaller (measured: 185 MB -> 43 MB across
+          // the live corpus) and is what the canvas actually
+          // draws; see [sharedDisplayPath] for why three tiers rather than two.
+          //
+          // The fallback is not defensive dressing, it is the migration: every
+          // photo published before this tier existed HAS no display object, and
+          // `_publishDisplayBestEffort` is explicitly allowed to fail. Both land
+          // on the same branch, and both behave exactly as they did before —
+          // which is what makes this change safe to ship without a live run.
+          //
+          // `null` (object absent) is the only thing that falls through. A
+          // transport failure THROWS out of `downloadSharedPhoto`, and must keep
+          // doing so rather than being retried as a miss: a flaky network would
+          // otherwise silently pull the expensive tier it is here to avoid.
+          (canonicalId, ext) async =>
+              await _remote.downloadSharedPhoto(sharedDisplayPath(canonicalId)) ??
+              await _remote.downloadSharedPhoto(
+                sharedPhotoPath(canonicalId, ext),
+              ),
+          foreignByteBudget: _isWeb ? budget : null,
+          ownUid: uid,
+        );
+        sharedPhotosDownloaded = sharedPass.downloaded;
+        sharedPhotoBytesSkipped = sharedPass.skippedForBudget;
+      } catch (e) {
+        sharedHadError = true;
+        errors.add('shared photo downloads failed: $e');
+      }
     }
 
+    // Same order as the own section, for the same reason: on web the rows
+    // land first and the community appears at once — which is ALL a brand-new
+    // account has to look at — while the bytes follow below and anything on
+    // screen is fetched on demand. Native keeps bytes-then-rows.
+    final sharedImportedPaths = _photoPathsOf(sharedTables);
+    if (!_rowsBeforePhotos) await sharedPhotoPass();
+
+    var sharedRowsImported = false;
     try {
       final sharedReport = await _backupRepository.importSnapshot(
         {'tables': sharedTables},
@@ -1685,6 +1713,7 @@ class SyncService {
       // sharedImported reflects the WHOLE shared pipeline (shared-topos +
       // shared-ascents + profiles fetches, photo downloads, and this final
       // import), not just this write — mirrors ownImported above.
+      sharedRowsImported = true;
       sharedImported = !sharedHadError;
       if (sharedReport.hasDeferrals) {
         // Should not normally happen: both shared fetches assemble their rows
@@ -1696,6 +1725,21 @@ class SyncService {
       }
     } catch (e) {
       errors.add('shared rows import failed: $e');
+    }
+
+    if (_rowsBeforePhotos && sharedRowsImported) {
+      final hadErrorBefore = sharedHadError;
+      await sharedPhotoPass();
+      if (sharedHadError && !hadErrorBefore) {
+        sharedImported = false;
+      } else {
+        try {
+          await _writeBackRewrittenPhotoPaths(sharedTables, sharedImportedPaths);
+        } catch (e) {
+          sharedImported = false;
+          errors.add('shared photo paths could not be updated: $e');
+        }
+      }
     }
 
     // ---- OWN, second pass ------------------------------------------------
@@ -1753,6 +1797,23 @@ class SyncService {
       } catch (e) {
         ownImported = false;
         errors.add('own deferred rows import failed: $e');
+      }
+    }
+
+    // ---- OWN photos (web) -------------------------------------------------
+    // Last, so neither the user's own rows nor the community's wait on it.
+    if (_rowsBeforePhotos && ownRowsImported) {
+      await ownPhotoPass();
+      if (ownPhotosFailed) {
+        // The rows DID get written; the pull is still not a clean one.
+        ownImported = false;
+      } else {
+        try {
+          await _writeBackRewrittenPhotoPaths(ownTables, ownImportedPaths);
+        } catch (e) {
+          ownImported = false;
+          errors.add('own photo paths could not be updated: $e');
+        }
       }
     }
 
@@ -1979,6 +2040,58 @@ class SyncService {
       downloaded: restoredCount,
       skippedForBudget: skippedCanonicalIds.length,
     );
+  }
+
+  /// Whether a pull imports rows BEFORE downloading their photo bytes.
+  ///
+  /// Web only. There, a row whose bytes have not arrived yet is fetched on
+  /// demand the moment something shows it (`MissingPhotoByteResolver`), so
+  /// writing rows first costs nothing and makes a fresh sign-in show its
+  /// library in seconds rather than after every photo has downloaded. Native
+  /// has no such path, so it keeps bytes-then-rows.
+  bool get _rowsBeforePhotos => _isWeb;
+
+  /// `photoId -> localPath` for every photo row in [tables], as fetched.
+  static Map<String, String?> _photoPathsOf(
+    Map<String, List<Map<String, dynamic>>> tables,
+  ) => {
+    for (final photo in tables['photos'] ?? const <Map<String, dynamic>>[])
+      if (photo['id'] case final String id) id: photo['localPath'] as String?,
+  };
+
+  /// Writes back the `localPath` of every photo row whose path the photo pass
+  /// changed AFTER the row had already been imported.
+  ///
+  /// On web, rows are imported before their bytes download (see
+  /// [_rowsBeforePhotos]), and [_downloadAndRewritePhotos] rewrites a row's
+  /// `localPath` to wherever [PhotoFiles.writePhotoBytes] put the bytes.
+  /// Every well-formed cloud row already carries exactly that key
+  /// (`photos/<canonicalId><ext>`, the same on web and native), so this is
+  /// normally a no-op. It exists for the rows that are not well-formed, which
+  /// the old download-then-import order silently repaired: without it they
+  /// would keep a path their bytes do not live at.
+  ///
+  /// A plain column update, deliberately NOT an import: the row's `updatedAt`
+  /// is unchanged, so an LWW re-import would skip it, and a local edit must
+  /// not be invented either — `dirty` is left alone, so nothing is pushed.
+  Future<void> _writeBackRewrittenPhotoPaths(
+    Map<String, List<Map<String, dynamic>>> tables,
+    Map<String, String?> importedPaths,
+  ) async {
+    for (final photo in tables['photos'] ?? const <Map<String, dynamic>>[]) {
+      final id = photo['id'] as String?;
+      final path = photo['localPath'] as String?;
+      final imported = importedPaths[id];
+      if (id == null || path == null || imported == null || imported == path) {
+        continue;
+      }
+      // Only a row that still holds the CLOUD path it was imported with. The
+      // LWW import skips a row whose local copy is newer — an unpushed edit —
+      // and the old bytes-then-rows order never touched such a row either.
+      await (_db.update(_db.photos)
+            ..where((t) => t.id.equals(id) & t.localPath.equals(imported)))
+          .write(db.PhotosCompanion(localPath: Value(path)));
+    }
   }
 
   /// How many ids one batched `id IN (...)` lookup carries.
