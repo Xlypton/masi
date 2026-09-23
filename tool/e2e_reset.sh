@@ -116,6 +116,16 @@ if [[ -n "$SERVICE_KEY" && "$SERVICE_KEY" != "null" ]]; then
     while IFS= read -r obj; do [[ -n "$obj" ]] && TO_DELETE+=("$obj"); done < <(list_prefix "$u")
   done
   TO_DELETE+=("shared/${E2E_PHOTO_PUBLISHED}.png" "shared/${E2E_PHOTO_PENDING}.png")
+  # ...and their derivatives, by exact name too. Both tiers are written by
+  # whoever views a published photo (the in-app backfill and, once, by
+  # `tool/backfill_shared_display.sh`), so a teardown that removed only the
+  # originals left them behind indefinitely — the fixture's thumbnail had
+  # survived every reset since 2026-08-10. Invisible, because the survivor check
+  # counts database rows. Still named objects only: never a sweep of
+  # `shared/thumbs/` or `shared/display/`, which hold the user's derivatives.
+  for id in "$E2E_PHOTO_PUBLISHED" "$E2E_PHOTO_PENDING"; do
+    TO_DELETE+=("shared/thumbs/${id}.jpg" "shared/display/${id}.jpg")
+  done
 
   # Scan videos and reconstructions live in their OWN bucket, and every object
   # in it sits under an owner-uid prefix — there is no shared/ equivalent, so
