@@ -458,8 +458,11 @@ String sharedThumbPath(String photoId) => 'shared/thumbs/$photoId$kSharedThumbEx
 /// 2048 is chosen against what actually draws it: the topo canvas on a phone,
 /// at most a ~1200px-wide viewport on a 3x screen, with pinch-zoom that a
 /// climber uses to read a line rather than to inspect grain. 2048 stays sharp
-/// through that and is ~13x smaller than the originals it stands in for, which
-/// on this project's real bucket average 5.5 MB.
+/// through that and, MEASURED on the live corpus when it was backfilled
+/// (2026-09-23), is ~4.3x smaller than the originals it stands in for: 185 MB of
+/// originals became 43 MB of display variants, ~1.3 MB each. (A pre-backfill
+/// estimate said ~13x; high-texture rock photos compress far worse than that.)
+/// The originals themselves average 5.5 MB.
 ///
 /// SAFE ONLY BECAUSE ROUTE GEOMETRY IS RESOLUTION-INDEPENDENT. Every anchor is
 /// stored normalized to the image's width/height (see `TopoRoute`), so a line
