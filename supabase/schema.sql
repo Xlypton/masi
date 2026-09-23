@@ -282,15 +282,38 @@ CREATE POLICY "topo_photos_own_all" ON storage.objects FOR ALL TO authenticated
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text)
   WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text);
 
+-- The three below are the LIVE shape (reconciled 2026-09-23). This file used to
+-- show the original wide-open versions — any signed-in user could read, write
+-- or overwrite anything under `shared/` — long after live had moved on. The
+-- helpers `can_read_shared_photo_object` / `owns_shared_photo_object` are
+-- defined in supabase/migrations/20260923_capture_shared_photo_storage_policies.sql,
+-- which must run first (as the 2026-08-06 community migrations must for
+-- `is_admin`, used by the delete policy below).
 CREATE POLICY "topo_photos_shared_read" ON storage.objects FOR SELECT TO authenticated
-  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared'
+         AND public.can_read_shared_photo_object(name));
 
+-- Original: owner only. Derivative (`thumbs/`, `display/`): any reader of the
+-- photo, because the in-app backfill runs for whoever is viewing. INSERT only.
 CREATE POLICY "topo_photos_shared_write" ON storage.objects FOR INSERT TO authenticated
-  WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+  WITH CHECK (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND CASE
+      WHEN array_length(storage.foldername(name), 1) = 1
+        THEN public.owns_shared_photo_object(name)
+      WHEN array_length(storage.foldername(name), 1) = 2
+       AND (storage.foldername(name))[2] IN ('thumbs', 'display')
+        THEN public.can_read_shared_photo_object(name)
+      ELSE false
+    END
+  );
 
 CREATE POLICY "topo_photos_shared_upd" ON storage.objects FOR UPDATE TO authenticated
-  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared')
-  WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared'
+         AND public.owns_shared_photo_object(name))
+  WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared'
+              AND public.owns_shared_photo_object(name));
 
 -- W-2. Without this there is NO delete path for the shared prefix at all: the
 -- three policies above cover SELECT/INSERT/UPDATE, and `topo_photos_own_all` is
