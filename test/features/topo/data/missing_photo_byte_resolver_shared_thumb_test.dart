@@ -54,6 +54,19 @@ class _FakeSharedBucket implements SyncRemote {
   );
 }
 
+/// A bucket whose `display/` tier fails in TRANSPORT (not "absent") — the
+/// shape of a dropped connection mid-heal.
+class _ThrowingOnDisplayBucket extends _FakeSharedBucket {
+  @override
+  Future<List<int>?> downloadSharedPhoto(String objectPath) async {
+    if (objectPath.startsWith('shared/display/')) {
+      requests.add(objectPath);
+      throw Exception('connection reset');
+    }
+    return super.downloadSharedPhoto(objectPath);
+  }
+}
+
 void main() {
   late Directory tmp;
 
@@ -131,12 +144,62 @@ void main() {
         );
 
         expect(await resolver.resolve('photos/photo-a.jpeg'), hasLength(20));
-        expect(remote.requests, ['shared/photo-a.jpeg']);
+        expect(
+          remote.requests,
+          ['shared/display/photo-a.jpg', 'shared/photo-a.jpeg'],
+          reason: 'a LEGACY photo has no display variant, so the probe misses '
+              'and the original is fetched with its own .jpeg — the display '
+              'probe\'s hard-coded .jpg must never leak into the fallback',
+        );
         expect(
           File(p.join(tmp.path, 'photos', 'photo-a.jpeg')).existsSync(),
           isTrue,
           reason: 'the next render must read it locally, not re-fetch it',
         );
+      },
+    );
+
+    test(
+      'an ORIGINAL key with a DISPLAY variant never touches the original — '
+      'the 5.5 MB-average object is what the tier exists to avoid',
+      () async {
+        final remote = _FakeSharedBucket()
+          ..objects['shared/display/photo-a.jpg'] = List<int>.filled(7, 5)
+          ..objects['shared/photo-a.jpeg'] = List<int>.filled(20, 3);
+        final resolver = SharedMissingPhotoByteResolver(
+          remote: remote,
+          photoFiles: photoFiles(),
+        );
+
+        expect(await resolver.resolve('photos/photo-a.jpeg'), hasLength(7));
+        expect(remote.requests, ['shared/display/photo-a.jpg']);
+        expect(
+          File(p.join(tmp.path, 'photos', 'photo-a.jpeg')).lengthSync(),
+          7,
+          reason: 'cached under the ORIGINAL\'s key, exactly as the pull stores '
+              'it, so the canvas finds it where it looks',
+        );
+      },
+    );
+
+    test(
+      'a display probe that FAILS in transport does not fall back to the '
+      'original — a flaky connection must not buy the expensive object',
+      () async {
+        final remote = _ThrowingOnDisplayBucket()
+          ..objects['shared/photo-a.jpeg'] = List<int>.filled(20, 3);
+        final resolver = SharedMissingPhotoByteResolver(
+          remote: remote,
+          photoFiles: photoFiles(),
+        );
+
+        expect(await resolver.resolve('photos/photo-a.jpeg'), isNull);
+        expect(remote.requests, ['shared/display/photo-a.jpg']);
+
+        // And the failure is remembered like any other, so a rebuilding widget
+        // does not turn one dropped request into a retry storm.
+        expect(await resolver.resolve('photos/photo-a.jpeg'), isNull);
+        expect(remote.requests, hasLength(1));
       },
     );
   });
@@ -168,6 +231,9 @@ void main() {
 
       expect(remote.requests, [
         'shared/thumbs/photo-a.jpg',
+        // Legacy photo: no display variant either, so the canvas-sized heal
+        // probes it, misses, and falls back to the original.
+        'shared/display/photo-a.jpg',
         'shared/photo-a.jpeg',
       ]);
     },
@@ -295,8 +361,12 @@ void main() {
     () async {
       final gate = Completer<void>();
       final remote = _FakeSharedBucket()..gate = gate;
+      // The normal state since the live backfill (2026-09-23): every shared
+      // photo has a display variant, so one resolve is one download. This test
+      // is about the QUEUE, not the tier — the legacy two-request path is
+      // pinned separately above.
       for (var i = 0; i < 6; i++) {
-        remote.objects['shared/photo-$i.jpg'] = List<int>.filled(4, 1);
+        remote.objects['shared/display/photo-$i.jpg'] = List<int>.filled(4, 1);
       }
       final resolver = SharedMissingPhotoByteResolver(
         remote: remote,

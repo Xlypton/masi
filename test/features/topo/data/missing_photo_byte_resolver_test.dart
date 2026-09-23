@@ -75,7 +75,10 @@ void main() {
 
       expect(bytes, isNotNull);
       expect(bytes, hasLength(8));
-      expect(remote.requests, ['shared/photo-a.jpg']);
+      // The DISPLAY variant, not the original: this is a canvas-sized heal,
+      // and the 2048px tier is what it should cost (2026-09-12 egress fix).
+      // The fake answers every path, so the original is never asked for.
+      expect(remote.requests, ['shared/display/photo-a.jpg']);
       expect(
         File(p.join(tmp.path, 'photos', 'photo-a.jpg')).existsSync(),
         isTrue,
@@ -124,7 +127,9 @@ void main() {
 
       await resolver.resolve(p.join('photos', 'photo-original.png'));
 
-      expect(remote.requests, ['shared/photo-original.png']);
+      // Addressed by the ORIGINAL's id — its display variant is keyed on the
+      // canonical id, so a slice needs no object of its own there either.
+      expect(remote.requests, ['shared/display/photo-original.jpg']);
     },
   );
 
@@ -144,7 +149,13 @@ void main() {
         expect(await resolver.resolve(key), isNull);
         expect(await resolver.resolve(key), isNull);
 
-        expect(remote.requests, hasLength(1));
+        expect(
+          remote.requests,
+          ['shared/display/photo-gone.jpg', 'shared/photo-gone.jpg'],
+          reason: 'ONE probe of each tier on the first resolve (no display '
+              'variant -> fall back to the original), and nothing at all on '
+              'the later ones',
+        );
       },
     );
 
@@ -162,7 +173,13 @@ void main() {
         expect(await resolver.resolve(key), isNull);
         expect(await resolver.resolve(key), isNull);
 
-        expect(remote.requests, hasLength(1));
+        expect(
+          remote.requests,
+          ['shared/display/photo-empty.jpg', 'shared/photo-empty.jpg'],
+          reason: 'ONE probe of each tier on the first resolve (no display '
+              'variant -> fall back to the original), and nothing at all on '
+              'the later ones',
+        );
       },
     );
 
@@ -184,12 +201,14 @@ void main() {
         await resolver.resolve(key);
         now = now.add(const Duration(seconds: 59));
         await resolver.resolve(key);
-        expect(remote.requests, hasLength(1), reason: 'still inside the window');
+        // Two, not one: the first resolve probes the display tier, finds it
+        // absent, and falls back to the (also absent) original.
+        expect(remote.requests, hasLength(2), reason: 'still inside the window');
 
         now = now.add(const Duration(seconds: 2));
         remote.bytes = List<int>.filled(4, 9);
         expect(await resolver.resolve(key), hasLength(4));
-        expect(remote.requests, hasLength(2));
+        expect(remote.requests, hasLength(3), reason: 'one more: the display hit');
       },
     );
 
@@ -206,7 +225,12 @@ void main() {
         await resolver.resolve(p.join('photos', 'photo-a.jpg'));
         await resolver.resolve(p.join('photos', 'photo-b.jpg'));
 
-        expect(remote.requests, ['shared/photo-a.jpg', 'shared/photo-b.jpg']);
+        expect(remote.requests, [
+          'shared/display/photo-a.jpg',
+          'shared/photo-a.jpg',
+          'shared/display/photo-b.jpg',
+          'shared/photo-b.jpg',
+        ]);
       },
     );
   });
@@ -335,7 +359,7 @@ void main() {
         );
         expect(
           remote.requests,
-          ['shared/photo-a.jpg'],
+          ['shared/display/photo-a.jpg'],
           reason: 'the resolver must fetch through the injected SyncRemote',
         );
       },
