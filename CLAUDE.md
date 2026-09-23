@@ -475,6 +475,15 @@ the old are deleted and re-derived.
   negative controls first; a run where every upload succeeds is equally consistent with a wide-open
   policy. The one original left without a variant is on a `shared` wall that is not yet public, so
   only its owner can read it, and their own in-app backfill will derive it.
+- **There are TWO doors to a foreign photo, and the tier must cover both.** The pull prefetches
+  up to the budget; on web, everything else is fetched when OPENED by `MissingPhotoByteResolver`.
+  The first version of the tier fixed only the pull, so every opened foreign topo still cost its
+  original. Both now probe `display/` first. The resolver's `_probe` also separates "absent" from
+  "network failed": only an absent variant falls back to the original, or a flaky connection would
+  buy the expensive object on every dropped request.
+- **The display bytes live under the ORIGINAL's key**, so a `.png` photo's local copy holds JPEG
+  bytes. Harmless — web builds untyped Blobs and every renderer sniffs content — but do not "fix"
+  it by trusting the extension anywhere that decodes.
 - **Native stays unbounded, deliberately** — the documented decision at
   `missingPhotoByteResolverProvider` ("WEB-ONLY IN PRACTICE"): native has no origin quota, and a
   budget without on-demand healing leaves foreign topos on blank placeholders. What that costs on
