@@ -26,9 +26,10 @@
 //    `missingLocalBytes` or `fullyLanded`. Each assertion has a negative control
 //    in the same group: the identical fixture with the original NOT yet in the
 //    cloud, which must still fail, or the assertions would be vacuous.
-//  * CONVERGENCE (the `SharedThumbBackfill` group) — the legacy objects still do
-//    get their thumbnail, through a channel that reports nothing to anyone and
-//    never re-uploads an original.
+//  * CONVERGENCE (the `SharedDerivativeBackfill` group) — the legacy objects
+//    still get their thumbnail AND their display variant (the 2048px tier added
+//    2026-09-12), both from ONE download of the original, through a channel
+//    that reports nothing to anyone and never re-uploads an original.
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -630,13 +631,31 @@ void main() {
     );
   });
 
-  group('SharedThumbBackfill (the side channel)', () {
-    /// A backfill wired to an in-memory bucket. [thumbnail] defaults to a
-    /// deterministic 8-byte stand-in — driving a real image codec here would
+  group('SharedDerivativeBackfill (the side channel)', () {
+    SharedDerivativeGap both(String name) =>
+        (name: name, thumb: true, display: true);
+
+    /// The worklist a real listing of [bucket] would produce.
+    List<SharedDerivativeGap> gapsIn(
+      Map<String, List<int>> bucket,
+      List<String> originals,
+    ) => sharedDerivativeGaps(
+      originalNames: originals,
+      thumbNames: {
+        for (final path in bucket.keys)
+          if (p.dirname(path) == 'shared/thumbs') p.basename(path),
+      },
+      displayNames: {
+        for (final path in bucket.keys)
+          if (p.dirname(path) == 'shared/display') p.basename(path),
+      },
+    );
+    /// A backfill wired to an in-memory bucket. [thumbnail] and [display]
+    /// default to deterministic 4-byte stand-ins — driving a real image codec here would
     /// test `generateThumbnail`, which has its own tests, and would be the one
     /// thing in this file that could hang.
     ({
-      SharedThumbBackfill backfill,
+      SharedDerivativeBackfill backfill,
       Map<String, List<int>> bucket,
       List<String> downloads,
       List<String> uploads,
@@ -644,13 +663,14 @@ void main() {
     makeBackfill({
       int maxPerPass = 3,
       Future<Uint8List> Function(Uint8List)? thumbnail,
+      Future<Uint8List> Function(Uint8List)? display,
       Future<List<int>?> Function(String)? download,
       Future<void> Function(String, Uint8List)? upload,
     }) {
       final bucket = <String, List<int>>{};
       final downloads = <String>[];
       final uploads = <String>[];
-      final backfill = SharedThumbBackfill(
+      final backfill = SharedDerivativeBackfill(
         maxPerPass: maxPerPass,
         download:
             download ??
@@ -666,6 +686,8 @@ void main() {
             },
         thumbnail:
             thumbnail ?? (original) async => Uint8List.fromList([1, 2, 3, 4]),
+        display:
+            display ?? (original) async => Uint8List.fromList([5, 6, 7, 8]),
       );
       return (
         backfill: backfill,
@@ -676,24 +698,31 @@ void main() {
     }
 
     test(
-      'ASSERTION 3 — a legacy original gets its thumbnail WITHOUT its '
-      'multi-megabyte original being re-uploaded',
+      'ASSERTION 3 — a legacy original gets BOTH derivatives from ONE '
+      'download, WITHOUT its multi-megabyte original being re-uploaded',
       () async {
         final h = makeBackfill();
         h.bucket['shared/legacy.jpeg'] = List<int>.filled(4096, 9);
 
-        h.backfill.schedule(const ['legacy.jpeg']);
+        h.backfill.schedule([both('legacy.jpeg')]);
         await h.backfill.pending;
 
-        expect(h.downloads, ['shared/legacy.jpeg']);
+        expect(
+          h.downloads,
+          ['shared/legacy.jpeg'],
+          reason: 'one download feeds both tiers — the download is the only '
+              'expensive step, and paying it twice per object would undo the '
+              'egress saving the display tier exists for',
+        );
         expect(
           h.uploads,
-          ['shared/thumbs/legacy.jpg'],
+          ['shared/thumbs/legacy.jpg', 'shared/display/legacy.jpg'],
           reason:
-              'exactly one upload, and it is the ~30KB derivative — the 94MB '
-              'of legacy originals must never go back over the wire',
+              'exactly the two derivatives — the legacy originals must never '
+              'go back over the wire',
         );
         expect(h.bucket['shared/thumbs/legacy.jpg'], [1, 2, 3, 4]);
+        expect(h.bucket['shared/display/legacy.jpg'], [5, 6, 7, 8]);
         expect(
           h.bucket['shared/legacy.jpeg'],
           hasLength(4096),
@@ -714,13 +743,7 @@ void main() {
 
         var passes = 0;
         while (true) {
-          final worklist = sharedOriginalsNeedingThumbs(
-            originalNames: originals,
-            thumbNames: {
-              for (final path in h.bucket.keys)
-                if (p.dirname(path) == 'shared/thumbs') p.basename(path),
-            },
-          );
+          final worklist = gapsIn(h.bucket, originals);
           if (worklist.isEmpty) break;
           expect(++passes, lessThan(10), reason: 'must terminate');
           h.backfill.schedule(worklist);
@@ -729,27 +752,80 @@ void main() {
 
         expect(passes, 3, reason: '5 originals at 2 per pass');
         for (final name in originals) {
+          final id = p.basenameWithoutExtension(name);
           expect(
-            h.bucket['shared/thumbs/${p.basenameWithoutExtension(name)}.jpg'],
+            h.bucket['shared/thumbs/$id.jpg'],
             isNotNull,
             reason: '$name never got its thumbnail',
           );
+          expect(
+            h.bucket['shared/display/$id.jpg'],
+            isNotNull,
+            reason: '$name never got its display variant',
+          );
         }
+        expect(
+          h.downloads,
+          hasLength(originals.length),
+          reason: 'exactly one download per original, for both tiers',
+        );
 
         // Converged: a further listing worklists nothing, so a further pass
         // downloads nothing.
         final downloadsAfter = h.downloads.length;
-        h.backfill.schedule(
-          sharedOriginalsNeedingThumbs(
-            originalNames: originals,
-            thumbNames: {
-              for (final path in h.bucket.keys)
-                if (p.dirname(path) == 'shared/thumbs') p.basename(path),
-            },
-          ),
-        );
+        h.backfill.schedule(gapsIn(h.bucket, originals));
         await h.backfill.pending;
         expect(h.downloads, hasLength(downloadsAfter));
+      },
+    );
+
+    test(
+      'an original that already has its thumbnail gets ONLY the display '
+      'variant — the live corpus\'s state when that tier landed — and its '
+      'thumbnail is not re-derived or re-uploaded',
+      () async {
+        var thumbsDerived = 0;
+        final h = makeBackfill(
+          thumbnail: (original) async {
+            thumbsDerived++;
+            return Uint8List.fromList([1]);
+          },
+        );
+        h.bucket['shared/between.jpeg'] = List<int>.filled(4096, 9);
+        h.bucket['shared/thumbs/between.jpg'] = [42];
+
+        h.backfill.schedule(gapsIn(h.bucket, ['between.jpeg']));
+        await h.backfill.pending;
+
+        expect(h.uploads, ['shared/display/between.jpg']);
+        expect(thumbsDerived, 0);
+        expect(h.bucket['shared/thumbs/between.jpg'], [42]);
+      },
+    );
+
+    test(
+      'a transient upload failure on one tier does not cost the other tier its '
+      'turn from the same download',
+      () async {
+        final uploads = <String>[];
+        final backfill = SharedDerivativeBackfill(
+          download: (objectPath) async => List<int>.filled(16, 1),
+          upload: (objectPath, bytes) async {
+            if (objectPath.contains('/thumbs/')) throw StateError('503');
+            uploads.add(objectPath);
+          },
+          thumbnail: (original) async => Uint8List.fromList([1]),
+          display: (original) async => Uint8List.fromList([2]),
+        );
+        backfill.schedule([both('a.jpg')]);
+        await backfill.pending;
+
+        expect(uploads, ['shared/display/a.jpg']);
+        expect(
+          backfill.givenUp,
+          isEmpty,
+          reason: 'an upload failure is transient, not a property of the pixels',
+        );
       },
     );
 
@@ -762,14 +838,14 @@ void main() {
         },
       );
 
-      h.backfill.schedule(const ['a.jpg']);
-      h.backfill.schedule(const ['b.jpg', 'c.jpg']);
+      h.backfill.schedule([both('a.jpg')]);
+      h.backfill.schedule([both('b.jpg'), both('c.jpg')]);
       gate.complete();
       await h.backfill.pending;
 
       expect(
         h.uploads,
-        ['shared/thumbs/a.jpg'],
+        ['shared/thumbs/a.jpg', 'shared/display/a.jpg'],
         reason: 'a push every 30 seconds must not stack overlapping passes',
       );
     });
@@ -787,7 +863,7 @@ void main() {
           upload: (objectPath, bytes) async => throw StateError('storage down'),
         );
 
-        h.backfill.schedule(const ['boom.jpg', 'other.jpg']);
+        h.backfill.schedule([both('boom.jpg'), both('other.jpg')]);
         // The property is that awaiting the pass completes normally. A throw
         // anywhere inside would surface here (and, in production, as an
         // unhandled async error from a fire-and-forget future).
@@ -798,23 +874,23 @@ void main() {
     );
 
     test(
-      'a photo whose thumbnail cannot be DERIVED is given up on for the '
+      'a photo whose derivative cannot be DERIVED is given up on for the '
       'session — never retried every pass, and never published as a fake '
-      'thumbnail',
+      'derivative',
       () async {
         final h = makeBackfill(
           thumbnail: (original) async => throw StateError('undecodable'),
         );
         h.bucket['shared/broken.jpg'] = List<int>.filled(4096, 9);
 
-        h.backfill.schedule(const ['broken.jpg']);
+        h.backfill.schedule([both('broken.jpg')]);
         await h.backfill.pending;
 
         expect(h.uploads, isEmpty, reason: 'no thumbnail is better than a '
             'multi-megabyte object at the path every tile fetches');
         expect(h.backfill.givenUp, {'broken.jpg'});
 
-        h.backfill.schedule(const ['broken.jpg']);
+        h.backfill.schedule([both('broken.jpg')]);
         await h.backfill.pending;
         expect(
           h.downloads,
@@ -832,23 +908,24 @@ void main() {
         var attempts = 0;
         final bucket = <String, List<int>>{'shared/a.jpg': List<int>.filled(16, 1)};
         final uploads = <String>[];
-        final backfill = SharedThumbBackfill(
+        final backfill = SharedDerivativeBackfill(
           download: (objectPath) async {
             if (++attempts == 1) throw StateError('offline');
             return bucket[objectPath];
           },
           upload: (objectPath, bytes) async => uploads.add(objectPath),
           thumbnail: (original) async => Uint8List.fromList([1]),
+          display: (original) async => Uint8List.fromList([2]),
         );
 
-        backfill.schedule(const ['a.jpg']);
+        backfill.schedule([both('a.jpg')]);
         await backfill.pending;
         expect(uploads, isEmpty);
         expect(backfill.givenUp, isEmpty);
 
-        backfill.schedule(const ['a.jpg']);
+        backfill.schedule([both('a.jpg')]);
         await backfill.pending;
-        expect(uploads, ['shared/thumbs/a.jpg']);
+        expect(uploads, ['shared/thumbs/a.jpg', 'shared/display/a.jpg']);
       },
     );
 
@@ -858,7 +935,7 @@ void main() {
         final wedge = Completer<void>();
         final uploads = <String>[];
         var downloads = 0;
-        final backfill = SharedThumbBackfill(
+        final backfill = SharedDerivativeBackfill(
           // Real time, scaled down from the production 45s: the property is
           // that the latch is released at all, not how long that takes.
           perStepTimeout: const Duration(milliseconds: 50),
@@ -869,20 +946,21 @@ void main() {
           },
           upload: (objectPath, bytes) async => uploads.add(objectPath),
           thumbnail: (original) async => Uint8List.fromList([1]),
+          display: (original) async => Uint8List.fromList([2]),
         );
 
-        backfill.schedule(const ['stuck.jpg']);
+        backfill.schedule([both('stuck.jpg')]);
         await pumpEventQueue();
         expect(downloads, 1);
 
         // Still latched while the stuck step is inside its budget.
-        backfill.schedule(const ['other.jpg']);
+        backfill.schedule([both('other.jpg')]);
         await pumpEventQueue();
         expect(downloads, 1);
 
         await backfill.pending;
 
-        backfill.schedule(const ['other.jpg']);
+        backfill.schedule([both('other.jpg')]);
         await backfill.pending;
         expect(
           downloads,

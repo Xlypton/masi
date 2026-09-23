@@ -372,7 +372,7 @@ abstract class SyncRemote {
   ///
   /// Backfilling the thumbnails of everything published BEFORE the tier existed
   /// is therefore a SIDE CHANNEL that cannot touch publish state at all — see
-  /// [sharedOriginalsNeedingThumbs] and [SharedThumbBackfill]. There is no
+  /// [sharedDerivativeGaps] and [SharedDerivativeBackfill]. There is no
   /// outbox to schedule a migration through (decision D-4), and this is why one
   /// is not needed: a missing thumbnail is not a failure to heal, it is a
   /// derivative that has not been computed yet, and the read path already
@@ -522,8 +522,17 @@ Set<String> publishedSharedOriginals(Iterable<String> originalNames) => {
     if (p.extension(name).isNotEmpty) 'shared/$name',
 };
 
-/// The ORIGINAL object NAMES under `shared/` that have no `shared/thumbs/`
-/// companion yet — the side-channel backfill's worklist, in listing order.
+/// One legacy original's missing derivatives: the backfill's unit of work.
+///
+/// Carries WHICH derivatives are missing, not just the name, because the two
+/// tiers were introduced at different times and a given object can lack either,
+/// both, or neither: every original published between the thumbnail tier and
+/// the display tier (2026-09-12) has its thumbnail and no display variant.
+typedef SharedDerivativeGap = ({String name, bool thumb, bool display});
+
+/// The ORIGINAL object NAMES under `shared/` missing a `shared/thumbs/` or a
+/// `shared/display/` companion — the side-channel backfill's worklist, in
+/// listing order, with what each one needs.
 ///
 /// The complement of a publication check, NOT a publication check: nothing here
 /// feeds [SupabaseSyncRemote.listSharedPhotoObjectPaths]'s return value, and
@@ -532,32 +541,44 @@ Set<String> publishedSharedOriginals(Iterable<String> originalNames) => {
 /// [SyncRemote.listSharedPhotoObjectPaths] for what happened when the two were
 /// the same computation.
 ///
-/// The join is on the id, i.e. the name minus its extension, because the two
-/// sides deliberately do not share one: the original keeps whatever the
-/// climber's camera produced (`.jpeg`, `.png`, `.JPG`) while the thumbnail is
-/// always [kSharedThumbExt]. Matching on the full name is the mistake this
-/// helper exists to make impossible.
+/// The join is on the id, i.e. the name minus its extension, because the sides
+/// deliberately do not share one: the original keeps whatever the climber's
+/// camera produced (`.jpeg`, `.png`, `.JPG`) while both derivatives are always
+/// JPEG ([kSharedThumbExt], [kSharedDisplayExt]). Matching on the full name is
+/// the mistake this helper exists to make impossible.
 ///
 /// Extension-less entries are skipped for the same reason as in
 /// [publishedSharedOriginals], and here it is load-bearing rather than
-/// cosmetic: the `thumbs` folder pseudo-entry would otherwise be worklisted
-/// forever (nothing can ever produce a `thumbs.jpg` for it), and every pass
-/// would spend a download attempt trying to read a directory as a photo.
-List<String> sharedOriginalsNeedingThumbs({
+/// cosmetic: the `thumbs` and `display` folder pseudo-entries would otherwise
+/// be worklisted forever (nothing can produce a `thumbs.jpg` for a directory),
+/// and every pass would spend a download trying to read a folder as a photo.
+List<SharedDerivativeGap> sharedDerivativeGaps({
   required Iterable<String> originalNames,
   required Set<String> thumbNames,
+  required Set<String> displayNames,
 }) => [
   for (final name in originalNames)
-    if (p.extension(name).isNotEmpty &&
-        !thumbNames.contains(
+    if (p.extension(name).isNotEmpty)
+      (
+        name: name,
+        thumb: !thumbNames.contains(
           '${p.basenameWithoutExtension(name)}$kSharedThumbExt',
-        ))
-      name,
-];
+        ),
+        display: !displayNames.contains(
+          '${p.basenameWithoutExtension(name)}$kSharedDisplayExt',
+        ),
+      ),
+].where((gap) => gap.thumb || gap.display).toList();
 
-/// Derives the missing `shared/thumbs/<id>.jpg` companions of originals that
-/// were published before the thumbnail tier existed — WITHOUT re-uploading a
-/// single original, and without any connection to publish state.
+/// Derives the missing `shared/thumbs/<id>.jpg` and `shared/display/<id>.jpg`
+/// companions of originals published before those tiers existed — WITHOUT
+/// re-uploading a single original, and without any connection to publish state.
+///
+/// BOTH tiers come out of ONE download. The download of the original is the
+/// only expensive step (the corpus averages 5.5 MB an object); each derivative
+/// is a re-encode of pixels already in memory plus a small upload. Running a
+/// second backfill for the display tier would pay that download twice per
+/// object, which on a feature added to CUT egress would be self-defeating.
 ///
 /// ## Why a side channel and not the push
 ///
@@ -595,11 +616,12 @@ List<String> sharedOriginalsNeedingThumbs({
 /// already world-readable, so no one sees anything they could not already
 /// fetch.
 @visibleForTesting
-class SharedThumbBackfill {
-  SharedThumbBackfill({
+class SharedDerivativeBackfill {
+  SharedDerivativeBackfill({
     required Future<List<int>?> Function(String objectPath) download,
     required Future<void> Function(String objectPath, Uint8List bytes) upload,
     Future<Uint8List> Function(Uint8List original)? thumbnail,
+    Future<Uint8List> Function(Uint8List original)? display,
     this.maxPerPass = 3,
     this.perStepTimeout = const Duration(seconds: 45),
     // Private fields with named params, matching `SyncService`'s and
@@ -608,14 +630,19 @@ class SharedThumbBackfill {
     // not expressible here.
   }) : _download = download, // ignore: prefer_initializing_formals
        _upload = upload, // ignore: prefer_initializing_formals
-       _thumbnail = thumbnail ?? _computeThumbnail;
+       _thumbnail = thumbnail ?? _computeThumbnail,
+       _display = display ?? _computeDisplay;
 
   static Future<Uint8List> _computeThumbnail(Uint8List original) =>
       compute(generateThumbnail, original);
 
+  static Future<Uint8List> _computeDisplay(Uint8List original) =>
+      compute(generateSharedDisplayImage, original);
+
   final Future<List<int>?> Function(String objectPath) _download;
   final Future<void> Function(String objectPath, Uint8List bytes) _upload;
   final Future<Uint8List> Function(Uint8List original) _thumbnail;
+  final Future<Uint8List> Function(Uint8List original) _display;
 
   /// How many originals one pass may backfill. Three keeps a single push's
   /// incidental cost in the same order as the push itself.
@@ -625,11 +652,14 @@ class SharedThumbBackfill {
   /// cannot hold the single-pass latch for the rest of the session.
   final Duration perStepTimeout;
 
-  /// Object names whose pixels this session could not turn into a thumbnail
+  /// Object names whose pixels this session could not turn into a derivative
   /// (undecodable container, a backend that refuses the bitmap). Retrying those
   /// costs a full download every pass and cannot start succeeding, so they are
   /// dropped for the session — and dropping them is FREE, because a missing
-  /// thumbnail is a degradation to the original, not a failure.
+  /// derivative is a degradation to the original, not a failure.
+  ///
+  /// Keyed by the ORIGINAL, not per tier: both derivations decode the same
+  /// pixels, so a container one of them cannot read the other cannot either.
   final Set<String> _givenUp = <String>{};
 
   bool _running = false;
@@ -641,18 +671,19 @@ class SharedThumbBackfill {
   @visibleForTesting
   Future<void> get pending => _pending;
 
-  /// Object names this session gave up deriving a thumbnail for.
+  /// Object names this session gave up deriving a derivative for.
   @visibleForTesting
   Set<String> get givenUp => Set.unmodifiable(_givenUp);
 
-  /// Starts at most one pass over [originalNames] (the output of
-  /// [sharedOriginalsNeedingThumbs]) and RETURNS IMMEDIATELY. Never throws.
-  void schedule(Iterable<String> originalNames) {
+  /// Starts at most one pass over [gaps] (the output of
+  /// [sharedDerivativeGaps]) and RETURNS IMMEDIATELY. Never throws.
+  void schedule(Iterable<SharedDerivativeGap> gaps) {
     if (_running) return;
-    final batch = <String>[];
-    for (final name in originalNames) {
-      if (_givenUp.contains(name)) continue;
-      batch.add(name);
+    final batch = <SharedDerivativeGap>[];
+    for (final gap in gaps) {
+      if (_givenUp.contains(gap.name)) continue;
+      if (!gap.thumb && !gap.display) continue;
+      batch.add(gap);
       if (batch.length == maxPerPass) break;
     }
     if (batch.isEmpty) return;
@@ -663,8 +694,10 @@ class SharedThumbBackfill {
     unawaited(_pending);
   }
 
-  Future<void> _runPass(List<String> originalNames) async {
-    for (final name in originalNames) {
+  Future<void> _runPass(List<SharedDerivativeGap> batch) async {
+    for (final gap in batch) {
+      final name = gap.name;
+      final id = p.basenameWithoutExtension(name);
       try {
         final original = await _download(
           'shared/$name',
@@ -677,26 +710,37 @@ class SharedThumbBackfill {
             ? original
             : Uint8List.fromList(original);
 
-        final Uint8List thumb;
-        try {
-          thumb = await _thumbnail(source).timeout(perStepTimeout);
-        } catch (_) {
-          _givenUp.add(name);
-          continue;
+        // Each tier is derived and uploaded independently from the one
+        // download, so a transient upload failure on one does not cost the
+        // other its turn. It is retried on a later pass — at the price of one
+        // more download, which is the same price a thumb-only backfill paid.
+        final tiers = <(bool, Future<Uint8List> Function(Uint8List), String)>[
+          (gap.thumb, _thumbnail, sharedThumbPath(id)),
+          (gap.display, _display, sharedDisplayPath(id)),
+        ];
+        for (final (needed, derive, objectPath) in tiers) {
+          if (!needed) continue;
+          final Uint8List derived;
+          try {
+            derived = await derive(source).timeout(perStepTimeout);
+          } catch (_) {
+            _givenUp.add(name);
+            break;
+          }
+          if (derived.isEmpty) {
+            _givenUp.add(name);
+            break;
+          }
+          try {
+            await _upload(objectPath, derived).timeout(perStepTimeout);
+          } catch (_) {
+            // Transient — see the outer catch.
+          }
         }
-        if (thumb.isEmpty) {
-          _givenUp.add(name);
-          continue;
-        }
-
-        await _upload(
-          sharedThumbPath(p.basenameWithoutExtension(name)),
-          thumb,
-        ).timeout(perStepTimeout);
       } catch (_) {
         // Transient — offline, a Storage error, a timeout. Deliberately NOT
         // remembered: the object stays in the worklist exactly as long as it
-        // genuinely lacks a thumbnail, so the next pass retries it and the
+        // genuinely lacks a derivative, so the next pass retries it and the
         // whole mechanism heals itself the way every other no-outbox path in
         // this app does (decision D-4).
       }
@@ -1191,7 +1235,8 @@ class SupabaseSyncRemote implements SyncRemote {
   ///
   /// `late final` rather than an initializer-list entry because it closes over
   /// this instance's own storage helpers.
-  late final SharedThumbBackfill _thumbBackfill = SharedThumbBackfill(
+  late final SharedDerivativeBackfill _derivativeBackfill =
+      SharedDerivativeBackfill(
     download: downloadSharedPhoto,
     upload: (objectPath, bytes) => _client.storage
         .from(_bucket)
@@ -1207,7 +1252,7 @@ class SupabaseSyncRemote implements SyncRemote {
 
   /// The backfill pass in flight, for tests that need to await it.
   @visibleForTesting
-  SharedThumbBackfill get thumbBackfill => _thumbBackfill;
+  SharedDerivativeBackfill get derivativeBackfill => _derivativeBackfill;
 
   /// `SELECT [columns] FROM [table] WHERE [column] IN (…[ids])`, split into
   /// [kSyncInFilterChunkSize]-sized requests and concatenated.
@@ -1874,15 +1919,17 @@ class SupabaseSyncRemote implements SyncRemote {
     // skip-set this returns.
     final originals = await _listAllObjects('shared');
     final thumbs = await _listAllObjects('shared/thumbs');
+    final displays = await _listAllObjects('shared/$kSharedDisplayDirName');
     final originalNames = [for (final file in originals) file.name];
 
     // SIDE CHANNEL, fired and forgotten. It cannot delay this call, cannot fail
-    // it, and cannot change what it returns — see [SharedThumbBackfill] for why
+    // it, and cannot change what it returns — see [SharedDerivativeBackfill] for why
     // that isolation is the point rather than an optimisation.
-    _thumbBackfill.schedule(
-      sharedOriginalsNeedingThumbs(
+    _derivativeBackfill.schedule(
+      sharedDerivativeGaps(
         originalNames: originalNames,
         thumbNames: {for (final file in thumbs) file.name},
+        displayNames: {for (final file in displays) file.name},
       ),
     );
 

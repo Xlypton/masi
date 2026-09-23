@@ -394,15 +394,23 @@ void main() {
     );
   });
 
-  group('sharedOriginalsNeedingThumbs', () {
+  group('sharedDerivativeGaps', () {
+    // Shorthand for the worklist's names, for the tests that pin WHICH
+    // originals are listed rather than what each one needs.
+    List<String> names(List<SharedDerivativeGap> gaps) =>
+        [for (final gap in gaps) gap.name];
+
     test(
-      'lists exactly the originals published before the tier existed — the '
-      'backfill worklist, and nothing that feeds publish state',
+      'lists exactly the originals missing a derivative — the backfill '
+      'worklist, and nothing that feeds publish state',
       () {
         expect(
-          sharedOriginalsNeedingThumbs(
-            originalNames: ['done.jpeg', 'legacy.jpeg'],
-            thumbNames: {'done.jpg'},
+          names(
+            sharedDerivativeGaps(
+              originalNames: ['done.jpeg', 'legacy.jpeg'],
+              thumbNames: {'done.jpg'},
+              displayNames: {'done.jpg'},
+            ),
           ),
           ['legacy.jpeg'],
         );
@@ -410,13 +418,35 @@ void main() {
     );
 
     test(
-      'the join is on the ID, not the full name: originals keep .jpeg/.png/'
-      '.JPG while every thumbnail is .jpg',
+      'says WHICH tier is missing: an original from between the two tiers has '
+      'its thumbnail and needs only the display variant',
       () {
+        // The state of every one of the live bucket's shared originals when the
+        // display tier landed (2026-09-12).
         expect(
-          sharedOriginalsNeedingThumbs(
+          sharedDerivativeGaps(
+            originalNames: ['between.jpeg', 'ancient.jpeg'],
+            thumbNames: {'between.jpg'},
+            displayNames: const {},
+          ),
+          [
+            (name: 'between.jpeg', thumb: false, display: true),
+            (name: 'ancient.jpeg', thumb: true, display: true),
+          ],
+        );
+      },
+    );
+
+    test(
+      'the join is on the ID, not the full name: originals keep .jpeg/.png/'
+      '.JPG while every derivative is .jpg',
+      () {
+        const all = {'a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'};
+        expect(
+          sharedDerivativeGaps(
             originalNames: ['a.jpeg', 'b.png', 'c.JPG', 'd.jpg'],
-            thumbNames: {'a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'},
+            thumbNames: all,
+            displayNames: all,
           ),
           isEmpty,
           reason:
@@ -427,24 +457,29 @@ void main() {
     );
 
     test(
-      'the `thumbs` folder pseudo-entry is never worklisted — nothing can ever '
-      'produce a thumbs.jpg for it, so it would be retried every pass forever',
+      'the `thumbs` and `display` folder pseudo-entries are never worklisted — '
+      'nothing can produce a derivative for a directory, so each would be '
+      'retried every pass forever',
       () {
         expect(
-          sharedOriginalsNeedingThumbs(
-            originalNames: ['thumbs', 'a.jpg'],
-            thumbNames: const {},
+          names(
+            sharedDerivativeGaps(
+              originalNames: ['thumbs', 'display', 'a.jpg'],
+              thumbNames: const {},
+              displayNames: const {},
+            ),
           ),
           ['a.jpg'],
         );
       },
     );
 
-    test('an orphan thumbnail with no original worklists nothing', () {
+    test('an orphan derivative with no original worklists nothing', () {
       expect(
-        sharedOriginalsNeedingThumbs(
+        sharedDerivativeGaps(
           originalNames: const [],
           thumbNames: {'orphan.jpg'},
+          displayNames: {'orphan.jpg'},
         ),
         isEmpty,
       );
