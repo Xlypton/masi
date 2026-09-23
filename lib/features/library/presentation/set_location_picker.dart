@@ -11,6 +11,7 @@ import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/map/basemap.dart';
 import '../../../core/map/basemap_layer.dart';
+import '../../../core/map/map_gestures.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -566,21 +567,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
               initialCenter: center,
               initialZoom: zoom,
               onPositionChanged: _handlePositionChanged,
-              // Rotation is disabled outright — an accidental two-finger
-              // twist must never spin the map. Every other usual pan/zoom
-              // gesture stays enabled; only `InteractiveFlag.rotate` is
-              // omitted from the flags that would otherwise default to
-              // `InteractiveFlag.all`.
-              interactionOptions: const InteractionOptions(
-                flags:
-                    InteractiveFlag.drag |
-                    InteractiveFlag.flingAnimation |
-                    InteractiveFlag.pinchMove |
-                    InteractiveFlag.pinchZoom |
-                    InteractiveFlag.doubleTapZoom |
-                    InteractiveFlag.doubleTapDragZoom |
-                    InteractiveFlag.scrollWheelZoom,
-              ),
+              minZoom: kMapMinZoom,
+              maxZoom: kMapMaxZoom,
+              interactionOptions: masiMapInteractionOptions,
             ),
             children: const [BasemapLayer()],
           ),

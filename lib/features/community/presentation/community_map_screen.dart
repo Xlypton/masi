@@ -10,6 +10,7 @@ import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
 import '../../../core/map/basemap.dart';
 import '../../../core/map/basemap_layer.dart';
+import '../../../core/map/map_gestures.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -702,20 +703,9 @@ class _MapViewState extends ConsumerState<_MapView> {
       options: MapOptions(
         initialCenter: center,
         initialZoom: zoom,
-        // Rotation is disabled outright — an accidental two-finger twist
-        // must never spin the map. Every other usual pan/zoom gesture stays
-        // enabled; only `InteractiveFlag.rotate` is omitted from the flags
-        // that would otherwise default to `InteractiveFlag.all`.
-        interactionOptions: const InteractionOptions(
-          flags:
-              InteractiveFlag.drag |
-              InteractiveFlag.flingAnimation |
-              InteractiveFlag.pinchMove |
-              InteractiveFlag.pinchZoom |
-              InteractiveFlag.doubleTapZoom |
-              InteractiveFlag.doubleTapDragZoom |
-              InteractiveFlag.scrollWheelZoom,
-        ),
+        minZoom: kMapMinZoom,
+        maxZoom: kMapMaxZoom,
+        interactionOptions: masiMapInteractionOptions,
       ),
       children: [
         const BasemapLayer(),
